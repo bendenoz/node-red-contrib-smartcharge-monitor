@@ -1,0 +1,29 @@
+<script type="text/javascript">
+  RED.nodes.registerType("smartcharge-monitor", {
+    category: "function",
+    color: "#a6bbcf",
+    defaults: {
+      name: { value: "" },
+    },
+    inputs: 1,
+    outputs: 4,
+    icon: "function.svg",
+    label: function () {
+      return this.name || "smartcharge-monitor";
+    },
+  });
+</script>
+
+<script type="text/html" data-template-name="smartcharge-monitor">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+</script>
+
+<script type="text/html" data-help-name="smartcharge-monitor">
+  <p>
+    Node-RED custom node for intelligent monitoring and optimization of battery
+    charging based on power consumption insights
+  </p>
+</script>
