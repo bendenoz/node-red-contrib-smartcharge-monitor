@@ -4,9 +4,17 @@
     color: "#a6bbcf",
     defaults: {
       name: { value: "" },
+      stddev: { value: 0.05 },
     },
     inputs: 1,
-    outputs: 4,
+    outputs: 5,
+    outputLabels: [
+      "Filtered value",
+      "Standard deviation",
+      "Charge power rate, in W/s",
+      "Charge power acceleration, in W/s^2",
+      "OFF trigger",
+    ],
     icon: "function.svg",
     label: function () {
       return this.name || "smartcharge-monitor";
@@ -18,6 +26,10 @@
   <div class="form-row">
     <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
     <input type="text" id="node-input-name" placeholder="Name" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Standard Dev</label>
+    <input type="text" id="node-input-stddev" />
   </div>
 </script>
 
