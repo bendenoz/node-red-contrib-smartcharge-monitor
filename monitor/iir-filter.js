@@ -1,9 +1,16 @@
 class IIRFilter {
-  /** @type {number} */
+  /**
+   * Number of data points
+   */
   n = 0;
-  /** @type {number | null} */
+  /**
+   * Mean over maxCount samples (actually 95% of mean)
+   * @type {number | null}
+   */
   filteredValue = null;
-  /** @type {number} */
+  /**
+   * Average of squared differences from the mean
+   */
   variance = 0;
 
   constructor(maxCount = 10) {
@@ -12,9 +19,9 @@ class IIRFilter {
   }
 
   reset() {
-    this.n = 0; // Number of data points
-    this.filteredValue = null; // Mean over maxCount samples (actually 95% of mean)
-    this.variance = 0; // Average of squared differences from the mean
+    this.n = 0;
+    this.filteredValue = null;
+    this.variance = 0;
   }
 
   // Add a new data point
@@ -43,6 +50,11 @@ class IIRFilter {
 
   count() {
     return Math.min(this.n, this.maxCount);
+  }
+
+  /** Approximate delay, in sample count */
+  delay() {
+    return (this.count() - 1) / 2 + 1;
   }
 }
 
