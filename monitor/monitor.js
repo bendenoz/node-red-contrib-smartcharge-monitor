@@ -2,9 +2,6 @@
 
 const { IIRFilter } = require("./iir-filter");
 
-// TODO - Set Color ON / OFF (v > 0 Green, OFF 0)
-//      - Calculate total Power in WH
-
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
   /** @this {import("node-red").Node} */
@@ -13,20 +10,23 @@ const nodeInit = (RED) => {
     const node = this;
     const pvStdDev = config.stddev || 0.05;
 
+    /** @type {import("./types").Props} */
+    let props;
+
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        value: new IIRFilter(3),
-        longRate: new IIRFilter(30),
-        shortRate: new IIRFilter(12), // 0.4 * 30 ?
+        value: new IIRFilter(20),
+        longRate: new IIRFilter(30), // FIXME - 10 minutes, not 30 samples
+        shortRate: new IIRFilter(20), // 0.4 * 30 ?
         before: 0,
         cusum: 0,
-        energy: 0,
+        energy: props ? props.energy:  0,
       };
       return p;
     };
 
-    let props = initProps();
+    props = initProps();
 
     node.on("input", (msg, send, done) => {
       const pv = Number(msg.payload);
@@ -45,8 +45,14 @@ const nodeInit = (RED) => {
         if (props.before && value !== null && lastValue !== null) {
           const dt = (now - props.before) / 1e3;
 
+          if (value > 2*pvStdDev && lastValue < 2 * pvStdDev) {
+            // we reset total energy when signal is detected 
+            props.energy = 0;
+          }
+
           // test for reset condition
           // FIXME constant (0.25 * 30 ?)
+          /*
           if (props.longRate.count() > 8) {
             // to get meanValueTime, we assume dt is constant accross all samples
             // TODO: Add warning if not
@@ -59,10 +65,11 @@ const nodeInit = (RED) => {
               props.value.push(pv);
             }
           }
+          */
 
           if (props.before) {
             // update cumul
-            props.energy += (value - lastValue) * dt;
+            props.energy += value * dt;
 
             /** in Watt/sec */
             const currentRate = (value - lastValue) / dt;
@@ -100,6 +107,7 @@ const nodeInit = (RED) => {
         const st = props.value.stddev() || 0;
         if (v < 2 * pvStdDev) {
           node.status({ fill: "red", shape: "ring", text: "No input" });
+          props = initProps();
         } else {
           node.status({
             fill: "green",
