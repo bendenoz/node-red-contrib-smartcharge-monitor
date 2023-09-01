@@ -1,3 +1,5 @@
+// @ts-check
+
 class IIRFilter {
   /**
    * Number of data points
@@ -54,7 +56,7 @@ class IIRFilter {
 
   /** Approximate delay, in sample count */
   delay() {
-    return (this.count() - 1) / 2 + 1;
+    return (this.count() - 1) / 2; // + 1;
   }
 }
 

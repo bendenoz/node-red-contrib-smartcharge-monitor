@@ -1,6 +1,7 @@
 // @ts-check
 
 const { IIRFilter } = require("./iir-filter");
+const { SimpleKalmanFilter } = require("./simple-kalman-filter");
 
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
@@ -16,12 +17,12 @@ const nodeInit = (RED) => {
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        value: new IIRFilter(20),
+        value: new SimpleKalmanFilter({ R: 0.003, Q: 0.05 }),
         longRate: new IIRFilter(30), // FIXME - 10 minutes, not 30 samples
         shortRate: new IIRFilter(20), // 0.4 * 30 ?
         before: 0,
         cusum: 0,
-        energy: props ? props.energy:  0,
+        energy: props ? props.energy : 0,
       };
       return p;
     };
@@ -45,8 +46,8 @@ const nodeInit = (RED) => {
         if (props.before && value !== null && lastValue !== null) {
           const dt = (now - props.before) / 1e3;
 
-          if (value > 2*pvStdDev && lastValue < 2 * pvStdDev) {
-            // we reset total energy when signal is detected 
+          if (value > 2 * pvStdDev && lastValue < 2 * pvStdDev) {
+            // we reset total energy when signal is detected
             props.energy = 0;
           }
 
@@ -104,17 +105,22 @@ const nodeInit = (RED) => {
         props.before = now;
 
         const v = props.value.mean() || 0;
-        const st = props.value.stddev() || 0;
+        const st = props.value.kf.Q || 0;
+        const nrg = props.energy / 3600;
         if (v < 2 * pvStdDev) {
-          node.status({ fill: "red", shape: "ring", text: "No input" });
+          node.status({
+            fill: "red",
+            shape: "ring",
+            text: `No input - last ${nrg.toFixed(1)} Wh`,
+          });
           props = initProps();
         } else {
           node.status({
             fill: "green",
             shape: "ring",
-            text: `${v.toFixed(2)} W (±${st.toFixed(2)}) - total ${(
-              props.energy / 3600
-            ).toFixed(1)} Wh`,
+            text: `${v.toFixed(2)} W (±${st.toFixed(2)}) - total ${nrg.toFixed(
+              1
+            )} Wh`,
           });
         }
 

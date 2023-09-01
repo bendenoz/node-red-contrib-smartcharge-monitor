@@ -2,6 +2,18 @@
 # yarn lockfile v1
 
 
+"@rayyamhk/complex@1.0.10":
+  version "1.0.10"
+  resolved "https://registry.yarnpkg.com/@rayyamhk/complex/-/complex-1.0.10.tgz#6daa9c1bf4b6a86b2e1414a6aa8a1f32ef6a8ace"
+  integrity sha512-0HGH6SDcOd34zQVO97pfnIU6ul/qu0WkShZdupLLS3e5IEyNSkaX7mgVsDcWLpFNxLRs5RL2wS7iIYbsEp9MZg==
+
+"@rayyamhk/matrix@^1.0.5":
+  version "1.0.8"
+  resolved "https://registry.yarnpkg.com/@rayyamhk/matrix/-/matrix-1.0.8.tgz#207649294a59bedf302fc714cd393abfe67e9bf9"
+  integrity sha512-EIvEnmcL4q5FMb/g20/FxoZnewkbiiSY4S0+TWu+jkAKF4E/p8ocUN3CET0AXUVJwaA7t8drtBwGNFE8qAgAxg==
+  dependencies:
+    "@rayyamhk/complex" "1.0.10"
+
 "@types/ace@*":
   version "0.0.48"
   resolved "https://registry.yarnpkg.com/@types/ace/-/ace-0.0.48.tgz#1cb81872a282da1b49de16976d39e767e5ca435d"
@@ -179,3 +191,29 @@ jsonata@1.8.3:
   version "1.8.3"
   resolved "https://registry.yarnpkg.com/jsonata/-/jsonata-1.8.3.tgz#4d0c7337166e813689485e4fe7c7b5f067df3f80"
   integrity sha512-r6ztI6ohbpRo77AxBm6vMs3aHZi2L2PaakW7TCPwSkeGcuAZ/SxXGLWH2Npwqq5+YBM/fg/g0EXg/pI9HvXQ8Q==
+
+kalman-filter@^2.3.0:
+  version "2.3.0"
+  resolved "https://registry.yarnpkg.com/kalman-filter/-/kalman-filter-2.3.0.tgz#e20b7e32c93aaae5b1ac94a48c8b91e11657bb16"
+  integrity sha512-DcH0LcuJdU8uo9w8VaJvoDTQ5HtgpPAIpt81/3fP/zYBrfQVgQOa566ZVOeM6x93t5s95kByeEY26my4SrpH7w==
+  dependencies:
+    "@rayyamhk/matrix" "^1.0.5"
+    matrix-inverse "^2.0.0"
+    simple-linalg "^1.2.0"
+
+kalmanjs@^1.1.0:
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/kalmanjs/-/kalmanjs-1.1.0.tgz#9554566a0a7ca72722d35a23ab05915c0ddba99e"
+  integrity sha512-Gkm2DAKIX8geuDcEJ92e80EmQ6TyIzWBJk6AFk+aDLofQ4G/KoDe1RCY9WMuXFe0NQxsTi7HYh9BVQneOtlvkg==
+
+matrix-inverse@^2.0.0:
+  version "2.0.0"
+  resolved "https://registry.yarnpkg.com/matrix-inverse/-/matrix-inverse-2.0.0.tgz#2e8db33f8b977bd5e3b03f31d2fae89c2278203b"
+  integrity sha512-iUZfjmnAEDah54qLlj63PYFnZvcCwW+mhfYgf3KrtDn1ruyVE5vFrEeJ77RfsHaqMN/L3ZLnP+5/O2E7bgKEvQ==
+
+simple-linalg@^1.2.0:
+  version "1.2.1"
+  resolved "https://registry.yarnpkg.com/simple-linalg/-/simple-linalg-1.2.1.tgz#34eaca8528bfa02e8082f0be0f3c53d8ea088c2a"
+  integrity sha512-FLtQoxR9yhYPGbpFPT6dMz6n3VGiSXsy7LyLM47i2BpiLFbWdR4IRs+OjQ3Ouy1ukgrf/LUXrWN4THoxUdLACw==
+  dependencies:
+    matrix-inverse "^2.0.0"
