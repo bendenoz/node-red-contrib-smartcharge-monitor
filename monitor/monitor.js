@@ -1,6 +1,7 @@
 // @ts-check
 
 const { IIRFilter } = require("./iir-filter");
+const { KalmanFilter } = require("./kalman-filter");
 const { SimpleKalmanFilter } = require("./simple-kalman-filter");
 
 /** @type {import("node-red").NodeInitializer} */
@@ -17,7 +18,7 @@ const nodeInit = (RED) => {
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        value: new SimpleKalmanFilter({ R: 0.003, Q: 0.05 }),
+        value: new KalmanFilter(0.05, 20),
         longRate: new IIRFilter(30), // FIXME - 10 minutes, not 30 samples
         shortRate: new IIRFilter(20), // 0.4 * 30 ?
         before: 0,
@@ -35,9 +36,9 @@ const nodeInit = (RED) => {
       if (pv !== null && !isNaN(pv) && isFinite(pv)) {
         const now = performance.now();
 
-        const lastValue = props.value.mean();
+        const lastValue = props.value.mean()[0];
         props.value.push(pv);
-        const value = props.value.mean();
+        const value = props.value.mean()[0];
 
         let rate = 0;
         let accel = 0;
@@ -86,26 +87,26 @@ const nodeInit = (RED) => {
 
             // now try to be smart and analyze the slope if we have enough data
             // FIXME - Move to another node
-            const v = props.value.mean();
-            if (props.value.n > 15 && v) {
-              /** Rate in % per hour */
-              const testRate =
-                (100 * (3600 * (props.longRate.mean() || 0))) / v;
-              props.cusum =
-                testRate > -800 && testRate < -90
-                  ? props.cusum + (testRate - -90)
-                  : Math.min(0, props.cusum + 10);
-              if (props.cusum < -120) {
-                trigger = { payload: false }; // OFF payload
-                // props = initProps(); // TBC
-              }
-            }
+            // const v = props.value.mean();
+            // if (props.value.n > 15 && v) {
+            //   /** Rate in % per hour */
+            //   const testRate =
+            //     (100 * (3600 * (props.longRate.mean() || 0))) / v;
+            //   props.cusum =
+            //     testRate > -800 && testRate < -90
+            //       ? props.cusum + (testRate - -90)
+            //       : Math.min(0, props.cusum + 10);
+            //   if (props.cusum < -120) {
+            //     trigger = { payload: false }; // OFF payload
+            //     // props = initProps(); // TBC
+            //   }
+            // }
           }
         }
         props.before = now;
 
-        const v = props.value.mean() || 0;
-        const st = props.value.kf.Q || 0;
+        const v = props.value.mean()[0] || 0;
+        const st = 0;
         const nrg = props.energy / 3600;
         if (v < 2 * pvStdDev) {
           node.status({
@@ -127,7 +128,7 @@ const nodeInit = (RED) => {
         send([
           { payload: v, topic: "value" },
           { payload: st, topic: "stddev" },
-          { payload: rate, topic: "rate" },
+          { payload: props.value.mean()[1] || 0, topic: "rate" },
           { payload: accel, topic: "accel" },
           trigger,
         ]);
