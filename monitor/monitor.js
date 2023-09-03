@@ -1,5 +1,3 @@
-// @ts-check
-
 const { IIRFilter } = require("./iir-filter");
 const { KalmanFilter } = require("./kalman-filter");
 const { SimpleKalmanFilter } = require("./simple-kalman-filter");

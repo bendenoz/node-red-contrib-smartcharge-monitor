@@ -9,7 +9,7 @@ class SimpleKalmanFilter {
   constructor(opts = { R: 0.0001, Q: 0.05 }) {
     this.kf = new KF(opts);
   }
-  
+
   // Add a new data point
   /** @param {number} value */
   push(value) {
@@ -31,7 +31,7 @@ class SimpleKalmanFilter {
     const predCov = uncertainty(); // Kalman gain
     var K = predCov * C * (1 / (C * predCov * C + Q)); // Correction
 
-    const count = -3 / Math.log(K); // 1 - K ?
+    const count = -3 / Math.log(1 - K);
     return (count - 1) / 2;
   }
 

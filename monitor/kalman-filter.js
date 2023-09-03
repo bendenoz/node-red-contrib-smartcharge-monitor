@@ -1,13 +1,13 @@
-// @ts-check
+const KalmanClass = require("kalman-filter/lib/kalman-filter");
+const StateType = require("kalman-filter/lib/state");
 
-const { KalmanFilter: KF } = require("kalman-filter");
-const State = require("kalman-filter/lib/state");
+require("kalman-filter"); // must be required to init default models
 
 class KalmanFilter {
-  /** @type {KF} */
+  /** @type {KalmanClass} */
   kf;
 
-  /** @type {State | null} */
+  /** @type {StateType} */
   value = null;
 
   /**
@@ -15,10 +15,10 @@ class KalmanFilter {
    * @param {number} timestep sample interval, in seconds
    */
   constructor(stdev, timestep) {
-    this.kf = new KF({
+    this.kf = new KalmanClass({
       observation: {
         dimension: 1,
-        covariance: [stdev], // diag if not a matrix
+        covariance: [stdev ** 2], // diag if not a matrix
       },
       dynamic: {
         // name: "constant-speed",
@@ -26,8 +26,8 @@ class KalmanFilter {
         init: {
           mean: [[0], [0]],
           covariance: [
-            [1e8, 0],
-            [0, 1e8],
+            [1e6, 0],
+            [0, 1e6],
           ],
           index: -1, // ?
         },
@@ -35,7 +35,7 @@ class KalmanFilter {
           [1, timestep],
           [0, 1],
         ],
-        covariance: [stdev / 50, stdev / (timestep * 1e6)], // TODO - try stdev / 5 or 50 ?
+        covariance: [stdev ** 2 / 10 ** 2, stdev ** 2 / 10 ** 5 / 300], // gain of 0.12856 (~20 samples) for value stabilized
       },
     });
   }
@@ -64,18 +64,20 @@ class KalmanFilter {
   }
 
   count() {
-    return 0;
+    return this.value === null ? 0 : this.value.index;
   }
 
   /** Approximate delay, in sample count */
   delay() {
-    // TODO - this.K[1][0]
-    return 0;
+    const K = this.K[0][0];
+    const count = -3 / Math.log(1 - K);
+    return (count - 1) / 3;
   }
 
   // Get the current standard deviation
   stddev() {
-    return 0;
+    // the first entry in the predicted covariance is value variance
+    return this.value.covariance[0][0] ** 0.5;
   }
 }
 
