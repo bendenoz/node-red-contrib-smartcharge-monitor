@@ -1,6 +1,7 @@
 const { IIRFilter } = require("./iir-filter");
 const { KalmanFilter } = require("./kalman-filter");
 const { SimpleKalmanFilter } = require("./simple-kalman-filter");
+const { RollingDerivate } = require("./sg-derivate");
 
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
@@ -17,8 +18,7 @@ const nodeInit = (RED) => {
       /** @type {import("./types").Props} */
       const p = {
         value: new KalmanFilter(0.05, 20),
-        longRate: new IIRFilter(30), // FIXME - 10 minutes, not 30 samples
-        shortRate: new IIRFilter(20), // 0.4 * 30 ?
+        accel: new RollingDerivate(20),
         before: 0,
         cusum: 0,
         energy: props ? props.energy : 0,
@@ -38,8 +38,6 @@ const nodeInit = (RED) => {
         props.value.push(pv);
         const value = props.value.mean()[0];
 
-        let rate = 0;
-        let accel = 0;
         /** @type {import("@node-red/registry").NodeMessage | null} */
         let trigger = null;
         if (props.before && value !== null && lastValue !== null) {
@@ -52,59 +50,40 @@ const nodeInit = (RED) => {
 
           // test for reset condition
           // FIXME constant (0.25 * 30 ?)
-          /*
-          if (props.longRate.count() > 8) {
-            // to get meanValueTime, we assume dt is constant accross all samples
-            // TODO: Add warning if not
-            const meanValueTime = props.value.delay() * dt;
-            const predictedValue =
-              lastValue + meanValueTime * (props.longRate.mean() || 0);
-            const zScore = Math.abs((pv - predictedValue) / pvStdDev);
+
+          if (props.value.count() > 8) {
+            const zScore = Math.abs((pv - value) / pvStdDev);
             if (zScore > 5) {
-              props = initProps();
-              props.value.push(pv);
+              props.value.resetCovariance();
             }
           }
-          */
 
-          if (props.before) {
-            // update cumul
-            props.energy += value * dt;
+          // update cumul
+          props.energy += value * dt;
+          props.accel.push(props.value.mean()[1]);
 
-            /** in Watt/sec */
-            const currentRate = (value - lastValue) / dt;
-            props.longRate.push(currentRate);
-            props.shortRate.push(currentRate);
-
-            rate = props.longRate.mean() || 0;
-            /** mean value delta time */
-            const mvdt =
-              Math.max(1, props.longRate.delay() - props.shortRate.delay()) *
-              dt;
-            accel = ((props.shortRate.mean() || 0) - rate) / mvdt; // in Watt/sec^2
-
-            // now try to be smart and analyze the slope if we have enough data
-            // FIXME - Move to another node
-            // const v = props.value.mean();
-            // if (props.value.n > 15 && v) {
-            //   /** Rate in % per hour */
-            //   const testRate =
-            //     (100 * (3600 * (props.longRate.mean() || 0))) / v;
-            //   props.cusum =
-            //     testRate > -800 && testRate < -90
-            //       ? props.cusum + (testRate - -90)
-            //       : Math.min(0, props.cusum + 10);
-            //   if (props.cusum < -120) {
-            //     trigger = { payload: false }; // OFF payload
-            //     // props = initProps(); // TBC
-            //   }
-            // }
-          }
+          // now try to be smart and analyze the slope if we have enough data
+          // FIXME - Move to another node
+          // const v = props.value.mean();
+          // if (props.value.n > 15 && v) {
+          //   /** Rate in % per hour */
+          //   const testRate =
+          //     (100 * (3600 * (props.longRate.mean() || 0))) / v;
+          //   props.cusum =
+          //     testRate > -800 && testRate < -90
+          //       ? props.cusum + (testRate - -90)
+          //       : Math.min(0, props.cusum + 10);
+          //   if (props.cusum < -120) {
+          //     trigger = { payload: false }; // OFF payload
+          //     // props = initProps(); // TBC
+          //   }
+          // }
         }
         props.before = now;
 
         const v = props.value.mean()[0] || 0;
-        const st = 0;
+        const st = props.value.stddev();
+        const k = props.value.K[0];
         const nrg = props.energy / 3600;
         if (v < 2 * pvStdDev) {
           node.status({
@@ -119,7 +98,7 @@ const nodeInit = (RED) => {
             shape: "ring",
             text: `${v.toFixed(2)} W (±${st.toFixed(2)}) - total ${nrg.toFixed(
               1
-            )} Wh`,
+            )} Wh - K ${k.toFixed(3)}`,
           });
         }
 
@@ -127,7 +106,7 @@ const nodeInit = (RED) => {
           { payload: v, topic: "value" },
           { payload: st, topic: "stddev" },
           { payload: props.value.mean()[1] || 0, topic: "rate" },
-          { payload: accel, topic: "accel" },
+          { payload: props.accel.sg(), topic: "accel" },
           trigger,
         ]);
       } else {

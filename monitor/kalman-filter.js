@@ -10,6 +10,9 @@ class KalmanFilter {
   /** @type {StateType} */
   value = null;
 
+  /** @type {[number, number]} */
+  K = [0, 0];
+
   /**
    * @param {number} stdev process std dev
    * @param {number} timestep sample interval, in seconds
@@ -18,6 +21,7 @@ class KalmanFilter {
     this.kf = new KalmanClass({
       observation: {
         dimension: 1,
+        // R
         covariance: [stdev ** 2], // diag if not a matrix
       },
       dynamic: {
@@ -25,9 +29,10 @@ class KalmanFilter {
         dimension: 2,
         init: {
           mean: [[0], [0]],
+          // Initial P
           covariance: [
-            [1e6, 0],
-            [0, 1e6],
+            [10, 0],
+            [0, 10 ** -6],
           ],
           index: -1, // ?
         },
@@ -35,9 +40,20 @@ class KalmanFilter {
           [1, timestep],
           [0, 1],
         ],
-        covariance: [stdev ** 2 / 10 ** 2, stdev ** 2 / 10 ** 5 / 300], // gain of 0.12856 (~20 samples) for value stabilized
+        // Q
+        covariance: [
+          stdev ** 2 / 10 ** 1.5, // stdev ** 2 / 10 ** 1,
+          10 ** -8, // stdev ** 2 / 10 ** 1.5, //  / ((30 * 20) / timestep) ** 2,
+        ], // gain of 0.12856 (~20 samples) for value stabilized
       },
     });
+  }
+
+  resetCovariance() {
+    // reset P0 to speed-up recovery
+    this.value.covariance = this.kf.getInitState().covariance;
+    // also reset velocity to 0
+    this.value.mean[1] = [0];
   }
 
   // Add a new data point
@@ -47,7 +63,9 @@ class KalmanFilter {
       previousCorrected: this.value,
     });
 
-    this.K = this.kf.getGain({ predicted });
+    this.K = /** @type {[number, number]} */ (
+      this.kf.getGain({ predicted }).map(([v]) => v)
+    );
     // console.log('gain', this.gain);
 
     const correctedState = this.kf.correct({
