@@ -63,7 +63,7 @@ const nodeInit = (RED) => {
 
           // update cumul
           props.energy += value * dt;
-          props.accel.push(props.value.mean()[1]);
+          props.accel.push(props.value.mean()[1] || 0);
 
           // now try to be smart and analyze the slope if we have enough data
           // FIXME - Move to another node
@@ -85,7 +85,7 @@ const nodeInit = (RED) => {
         props.before = now;
 
         const v = props.value.mean()[0] || 0;
-        const st = props.value.stddev();
+        const st = props.value.stddev() || 0;
         const k = props.value.K[0];
         const nrg = props.energy / 3600;
         if (v < 2 * pvStdDev) {
@@ -105,7 +105,7 @@ const nodeInit = (RED) => {
           });
         }
 
-        const validSpeed = props.value.value.index > 3;
+        const validSpeed = props.value.state && props.value.state.index > 3;
 
         send([
           { payload: v, topic: "value" },

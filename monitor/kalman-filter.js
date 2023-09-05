@@ -1,3 +1,5 @@
+"use strict";
+
 const KalmanClass = require("kalman-filter/lib/kalman-filter");
 const StateType = require("kalman-filter/lib/state");
 
@@ -8,7 +10,7 @@ class KalmanFilter {
   kf;
 
   /** @type {StateType | null} */
-  value = null;
+  state = null;
 
   /** @type {[number, number]} */
   K = [0, 0];
@@ -43,26 +45,26 @@ class KalmanFilter {
         // Q
         covariance: [
           stdev ** 2 / 10 ** 1.5, // stdev ** 2 / 10 ** 1,
-          10 ** -8, // stdev ** 2 / 10 ** 1.5, //  / ((30 * 20) / timestep) ** 2,
+          10 ** -8.5, // stdev ** 2 / 10 ** 1.5, //  / ((30 * 20) / timestep) ** 2,
         ], // gain of 0.12856 (~20 samples) for value stabilized
       },
     });
   }
 
   resetCovariance() {
-    if (!this.value) return;
+    if (!this.state) return;
     // reset P0 to speed-up recovery
-    this.value.covariance = this.kf.getInitState().covariance;
-    this.value.index = -1;
+    this.state.covariance = this.kf.getInitState().covariance;
+    this.state.index = -1;
     // also reset velocity to 0
-    this.value.mean[1] = [0];
+    this.state.mean[1] = [0];
   }
 
   // Add a new data point
   /** @param {number} value */
   push(value) {
     const predicted = this.kf.predict({
-      previousCorrected: this.value,
+      previousCorrected: this.state,
     });
 
     this.K = /** @type {[number, number]} */ (
@@ -75,16 +77,16 @@ class KalmanFilter {
       observation: [value],
     });
 
-    this.value = correctedState;
+    this.state = correctedState;
   }
 
   /** @return {(number | null)[]} */
   mean() {
-    return this.value === null ? [null, null] : this.value.mean.map(([v]) => v);
+    return this.state === null ? [null, null] : this.state.mean.map(([v]) => v);
   }
 
   count() {
-    return this.value === null ? 0 : this.value.index;
+    return this.state === null ? 0 : this.state.index;
   }
 
   /** Approximate delay, in sample count */
@@ -97,7 +99,7 @@ class KalmanFilter {
   // Get the current standard deviation
   stddev() {
     // the first entry in the predicted covariance is value variance
-    return this.value.covariance[0][0] ** 0.5;
+    return this.state && this.state.covariance[0][0] ** 0.5;
   }
 }
 
