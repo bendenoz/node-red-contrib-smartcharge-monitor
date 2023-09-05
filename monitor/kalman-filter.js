@@ -32,7 +32,7 @@ class KalmanFilter {
           // Initial P
           covariance: [
             [10, 0],
-            [0, 10 ** -7],
+            [0, 10 ** -4],
           ],
           index: -1, // ?
         },
@@ -53,6 +53,7 @@ class KalmanFilter {
     if (!this.value) return;
     // reset P0 to speed-up recovery
     this.value.covariance = this.kf.getInitState().covariance;
+    this.value.index = -1;
     // also reset velocity to 0
     this.value.mean[1] = [0];
   }

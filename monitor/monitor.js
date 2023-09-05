@@ -105,7 +105,7 @@ const nodeInit = (RED) => {
           });
         }
 
-        const validSpeed = props.value.value.index > 5;
+        const validSpeed = props.value.value.index > 3;
 
         send([
           { payload: v, topic: "value" },
