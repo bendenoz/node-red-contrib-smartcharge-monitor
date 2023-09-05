@@ -25,6 +25,7 @@ class RollingDerivate {
     return this.buffer;
   }
 
+  /** Savitzky Golay first derivative calculation */
   sg() {
     if (this.buffer.length < this.size) return 0;
     return (

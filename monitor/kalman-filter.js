@@ -7,7 +7,7 @@ class KalmanFilter {
   /** @type {KalmanClass} */
   kf;
 
-  /** @type {StateType} */
+  /** @type {StateType | null} */
   value = null;
 
   /** @type {[number, number]} */
@@ -32,7 +32,7 @@ class KalmanFilter {
           // Initial P
           covariance: [
             [10, 0],
-            [0, 10 ** -6],
+            [0, 10 ** -7],
           ],
           index: -1, // ?
         },
@@ -50,6 +50,7 @@ class KalmanFilter {
   }
 
   resetCovariance() {
+    if (!this.value) return;
     // reset P0 to speed-up recovery
     this.value.covariance = this.kf.getInitState().covariance;
     // also reset velocity to 0
@@ -76,7 +77,7 @@ class KalmanFilter {
     this.value = correctedState;
   }
 
-  /** @return {number[]} */
+  /** @return {(number | null)[]} */
   mean() {
     return this.value === null ? [null, null] : this.value.mean.map(([v]) => v);
   }

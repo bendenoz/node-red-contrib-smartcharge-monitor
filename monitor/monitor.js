@@ -40,10 +40,13 @@ const nodeInit = (RED) => {
 
         /** @type {import("@node-red/registry").NodeMessage | null} */
         let trigger = null;
-        if (props.before && value !== null && lastValue !== null) {
+        if (props.before && value !== null) {
           const dt = (now - props.before) / 1e3;
 
-          if (value > 2 * pvStdDev && lastValue < 2 * pvStdDev) {
+          if (
+            value > 2 * pvStdDev &&
+            (lastValue === null || lastValue < 2 * pvStdDev)
+          ) {
             // we reset total energy when signal is detected
             props.energy = 0;
           }
@@ -102,11 +105,15 @@ const nodeInit = (RED) => {
           });
         }
 
+        const validSpeed = props.value.value.index > 5;
+
         send([
           { payload: v, topic: "value" },
           { payload: st, topic: "stddev" },
-          { payload: props.value.mean()[1] || 0, topic: "rate" },
-          { payload: props.accel.sg(), topic: "accel" },
+          validSpeed
+            ? { payload: props.value.mean()[1] || 0, topic: "rate" }
+            : null,
+          validSpeed ? { payload: props.accel.sg(), topic: "accel" } : null,
           trigger,
         ]);
       } else {
