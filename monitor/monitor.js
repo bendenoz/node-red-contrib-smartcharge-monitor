@@ -38,27 +38,23 @@ const nodeInit = (RED) => {
         props.value.push(pv);
         const value = props.value.mean()[0];
 
+        if (
+          value &&
+          value > 2 * pvStdDev &&
+          (lastValue === null || lastValue < 2 * pvStdDev)
+        ) {
+          // we reset total energy when signal is detected
+          props.energy = 0;
+        }
+
         /** @type {import("@node-red/registry").NodeMessage | null} */
         let trigger = null;
         if (props.before && value !== null) {
           const dt = (now - props.before) / 1e3;
 
-          if (
-            value > 2 * pvStdDev &&
-            (lastValue === null || lastValue < 2 * pvStdDev)
-          ) {
-            // we reset total energy when signal is detected
-            props.energy = 0;
-          }
-
-          // test for reset condition
-          // FIXME constant (0.25 * 30 ?)
-
-          if (props.value.count() > 8) {
-            const zScore = Math.abs((pv - value) / pvStdDev);
-            if (zScore > 3) {
-              props.value.resetCovariance(pv);
-            }
+          const zScore = Math.abs((pv - value) / pvStdDev);
+          if (zScore > 10 || (zScore > 3 && props.value.count() > 8)) {
+            props.value.resetCovariance(pv);
           }
 
           // update cumul
