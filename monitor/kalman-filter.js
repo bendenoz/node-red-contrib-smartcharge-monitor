@@ -6,7 +6,7 @@ const StateType = require("kalman-filter/lib/state");
 require("kalman-filter"); // must be required to init default models
 
 class KalmanFilter {
-  /** @type {KalmanClass} */
+  /** @type {KalmanClass | undefined} */
   kf;
 
   /** @type {StateType | null} */
@@ -16,53 +16,80 @@ class KalmanFilter {
   K = [0, 0];
 
   /**
+   * sample interval, in seconds
+   * @type {number}
+   */
+  timestep;
+
+  /**
+   * process std dev
+   * @type {number}
+   */
+  stdev;
+
+  /**
    * @param {number} stdev process std dev
    * @param {number} timestep sample interval, in seconds
    */
   constructor(stdev, timestep) {
+    this.timestep = timestep;
+    this.stdev = stdev;
+  }
+
+  /**
+   * Instanciate kalman filter with value
+   * @param {number} initValue
+   */
+  init(initValue) {
     this.kf = new KalmanClass({
       observation: {
         dimension: 1,
         // R
-        covariance: [stdev ** 2], // diag if not a matrix
+        covariance: [this.stdev ** 2], // diag if not a matrix
       },
       dynamic: {
         // name: "constant-speed",
         dimension: 2,
         init: {
-          mean: [[0], [0]],
+          mean: [[initValue], [0]],
           // Initial P
           covariance: [
             [10, 0],
-            [0, 10 ** -4],
+            [0, 10 ** -5],
           ],
-          index: -1, // ?
+          index: -1,
         },
         transition: [
-          [1, timestep],
+          [1, this.timestep],
           [0, 1],
         ],
         // Q
         covariance: [
-          stdev ** 2 / 10 ** 1.5, // stdev ** 2 / 10 ** 1,
-          10 ** -8.5, // stdev ** 2 / 10 ** 1.5, //  / ((30 * 20) / timestep) ** 2,
+          (this.stdev / 3600) ** 2, // stdev ** 2 / 10 ** 1,
+          (this.stdev / 3600) ** 2, // we want stable velocity in w/h
         ], // gain of 0.12856 (~20 samples) for value stabilized
       },
     });
   }
 
-  resetCovariance() {
-    if (!this.state) return;
+  /** @param {number} initValue */
+  resetCovariance(initValue) {
+    if (!this.state || !this.kf) return;
     // reset P0 to speed-up recovery
     this.state.covariance = this.kf.getInitState().covariance;
     this.state.index = -1;
-    // also reset velocity to 0
-    this.state.mean[1] = [0];
+    this.state.mean[0] = [initValue]; // reset init value
+    this.state.mean[1] = [0]; // also reset velocity to 0
+    // TODO - just reset this.state and this.kf ?
+    // TODO - replay last N samples
   }
 
   // Add a new data point
   /** @param {number} value */
   push(value) {
+    if (!this.kf) this.init(value);
+    if (!this.kf) throw new Error("No KF instance");
+
     const predicted = this.kf.predict({
       previousCorrected: this.state,
     });

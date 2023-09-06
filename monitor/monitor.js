@@ -56,8 +56,8 @@ const nodeInit = (RED) => {
 
           if (props.value.count() > 8) {
             const zScore = Math.abs((pv - value) / pvStdDev);
-            if (zScore > 5) {
-              props.value.resetCovariance();
+            if (zScore > 3) {
+              props.value.resetCovariance(pv);
             }
           }
 
