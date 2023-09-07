@@ -17,7 +17,8 @@ const nodeInit = (RED) => {
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        value: new KalmanFilter(0.05, 20),
+        slowFilter: new KalmanFilter(0.05, 20, 1800),
+        fastFilter: new KalmanFilter(0.05, 20, 50),
         accel: new RollingDerivate(20),
         before: 0,
         cusum: 0,
@@ -34,9 +35,10 @@ const nodeInit = (RED) => {
       if (pv !== null && !isNaN(pv) && isFinite(pv)) {
         const now = performance.now();
 
-        const lastValue = props.value.mean()[0];
-        props.value.push(pv);
-        const value = props.value.mean()[0];
+        const lastValue = props.slowFilter.mean()[0];
+        props.slowFilter.push(pv);
+        props.fastFilter.push(pv); // todo, delay slow by one sample
+        const value = props.slowFilter.mean()[0];
 
         if (
           value &&
@@ -52,14 +54,27 @@ const nodeInit = (RED) => {
         if (props.before && value !== null) {
           const dt = (now - props.before) / 1e3;
 
-          const zScore = Math.abs((pv - value) / pvStdDev);
-          if (zScore > 10 || (zScore > 3 && props.value.count() > 8)) {
-            props.value.resetCovariance(pv);
+          // const zScore = Math.abs((pv - value) / pvStdDev);
+          // if (zScore > 10 || (zScore > 3 && props.slowFilter.count() > 8)) {
+          //   props.slowFilter.resetCovariance(pv);
+          // }
+
+          const fastSpeed = props.fastFilter.mean()[1];
+          const slowSpeed = props.slowFilter.mean()[1];
+          if (
+            props.slowFilter.count() > 4 &&
+            fastSpeed &&
+            slowSpeed &&
+            (Math.abs(fastSpeed - slowSpeed) * 3600 > 5 || // percentage? add cusum?
+              (Math.abs(fastSpeed) * 3600) / pv > 10)
+          ) {
+            props.slowFilter.resetCovariance(pv);
+            props.fastFilter.resetCovariance(pv);
           }
 
           // update cumul
           props.energy += value * dt;
-          props.accel.push(props.value.mean()[1] || 0);
+          props.accel.push(props.slowFilter.mean()[1] || 0);
 
           // now try to be smart and analyze the slope if we have enough data
           // FIXME - Move to another node
@@ -80,9 +95,9 @@ const nodeInit = (RED) => {
         }
         props.before = now;
 
-        const v = props.value.mean()[0] || 0;
-        const st = props.value.stddev() || 0;
-        const k = props.value.K[0];
+        const v = props.slowFilter.mean()[0] || 0;
+        const st = props.slowFilter.stddev() || 0;
+        const k = props.slowFilter.K[0];
         const nrg = props.energy / 3600;
         if (v < 2 * pvStdDev) {
           node.status({
@@ -101,13 +116,13 @@ const nodeInit = (RED) => {
           });
         }
 
-        const validSpeed = props.value.state && props.value.state.index > 3;
+        const validSpeed = props.slowFilter.count() > 4;
 
         send([
           { payload: v, topic: "value" },
           { payload: st, topic: "stddev" },
           validSpeed
-            ? { payload: props.value.mean()[1] || 0, topic: "rate" }
+            ? { payload: props.slowFilter.mean()[1] || 0, topic: "rate" }
             : null,
           validSpeed ? { payload: props.accel.sg(), topic: "accel" } : null,
           trigger,

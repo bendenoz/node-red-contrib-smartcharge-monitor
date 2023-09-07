@@ -28,12 +28,19 @@ class KalmanFilter {
   stdev;
 
   /**
+   * speed average factor
+   * @type {number}
+   */
+  spdAvg;
+
+  /**
    * @param {number} stdev process std dev
    * @param {number} timestep sample interval, in seconds
    */
-  constructor(stdev, timestep) {
+  constructor(stdev, timestep, spdAvg = 1800) {
     this.timestep = timestep;
     this.stdev = stdev;
+    this.spdAvg = spdAvg;
   }
 
   /**
@@ -55,7 +62,7 @@ class KalmanFilter {
           // Initial P
           covariance: [
             [10, 0],
-            [0, 10 ** -5],
+            [0, 10 ** -4.5],
           ],
           index: -1,
         },
@@ -65,8 +72,8 @@ class KalmanFilter {
         ],
         // Q
         covariance: [
-          (this.stdev / 3600) ** 2, // stdev ** 2 / 10 ** 1,
-          (this.stdev / 3600) ** 2, // we want stable velocity in w/h
+          (this.stdev / 3) ** 2, // stdev ** 2 / 10 ** 1, // best i test  / 3 - 5
+          (this.stdev / this.spdAvg) ** 2, // we want stable velocity in w/h // best i test / 200 - 500 - 3 / 20 + 3 / 2000 ?
         ], // gain of 0.12856 (~20 samples) for value stabilized
       },
     });
