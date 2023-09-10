@@ -4,8 +4,10 @@ import { SimpleKalmanFilter } from "./simple-kalman-filter";
 import { RollingDerivate } from "./sg-derivate";
 
 export type Props = {
-  value: KalmanFilter;
+  slowFilter: KalmanFilter;
+  fastFilter: KalmanFilter;
   accel: RollingDerivate;
+  velocity: IIRFilter;
   /** last timestamp */
   before: number;
   cusum: number;
