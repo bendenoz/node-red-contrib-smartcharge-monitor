@@ -3,6 +3,8 @@ const { KalmanFilter } = require("./kalman-filter");
 const { SimpleKalmanFilter } = require("./simple-kalman-filter");
 const { RollingDerivate } = require("./sg-derivate");
 
+const fs = require("fs");
+
 // Detection constants base on relative velocity
 
 /** stdev */
@@ -12,14 +14,18 @@ const w = 0.15 * sigma;
 /** relative average */
 const avg = -0.5;
 /** relative threshold */
-const t = 15;
-/** Too high velocity, ignore */
-const maxScore = 5;
+const t = 20;
+/** Too high velocity, ignore "jumps" */
+const maxScore = 8;
 
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
   /** @this {import("node-red").Node} */
   function Monitor(config) {
+    // DEBUG
+    const fdata = `/tmp/data-${new Date().toISOString()}.csv`;
+    fs.appendFileSync(fdata, "timestamp,value\n");
+
     RED.nodes.createNode(this, config);
     const node = this;
     const pvStdDev = config.stddev || 0.05;
@@ -30,10 +36,10 @@ const nodeInit = (RED) => {
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        slowFilter: new KalmanFilter(0.05, 20, 3600),
-        fastFilter: new KalmanFilter(0.05, 20, 60),
-        velocity: new IIRFilter(15),
-        accel: new RollingDerivate(20),
+        fastFilter: new KalmanFilter(0.05, 20, 60), // our actual filter
+        slowFilter: new KalmanFilter(0.05, 20, 3600), // used for display
+        velocity: new IIRFilter(15), // used for display
+        accel: new RollingDerivate(20), // in W/s^2, not used
         before: 0,
         cusum: 0,
         energy: props ? props.energy : 0,
@@ -49,9 +55,11 @@ const nodeInit = (RED) => {
       if (pv !== null && !isNaN(pv) && isFinite(pv)) {
         const now = performance.now();
 
+        fs.appendFileSync(fdata, `${now},${pv}\n`);
+
         const lastValue = props.slowFilter.mean()[0];
         props.slowFilter.push(pv);
-        props.fastFilter.push(pv); // todo, delay slow by one sample
+        props.fastFilter.push(pv);
 
         const [valSlow, spdSlow] = props.slowFilter.mean();
         const [valFast, spdFast] = props.fastFilter.mean();
@@ -76,22 +84,15 @@ const nodeInit = (RED) => {
         ) {
           const dt = (now - props.before) / 1e3;
 
-          // const zScore = Math.abs((pv - value) / pvStdDev);
-          // if (zScore > 10 || (zScore > 3 && props.slowFilter.count() > 8)) {
-          //   props.slowFilter.resetCovariance(pv);
-          // }
-
           const relVel = (valFast && ((spdFast || 0) * 3600) / valFast) || 0;
           const zScore = (relVel - avg) / sigma;
           if (Math.abs(zScore) < maxScore) {
             props.cusum = Math.max(0, props.cusum - zScore - w);
             if (props.cusum > t) {
               props.cusum = 0;
-              // wrap in timeout to avoid read / write on some devices (meross)
+              // wrap in timeout to avoid simultaneous read / write on some devices (meross)
               setTimeout(() => {
                 send([
-                  null,
-                  null,
                   null,
                   null,
                   { payload: false }, // OFF payload
@@ -104,30 +105,13 @@ const nodeInit = (RED) => {
               props.velocity.push(0);
             }
           } else {
+            props.cusum = 0;
             props.slowFilter.resetCovariance(pv);
-            // props.slowFilter.push(pv);
           }
 
           // update cumul
           props.energy += valSlow * dt;
           props.accel.push(props.velocity.mean() || 0);
-
-          // now try to be smart and analyze the slope if we have enough data
-          // FIXME - Move to another node
-          // const v = props.value.mean();
-          // if (props.value.n > 15 && v) {
-          //   /** Rate in % per hour */
-          //   const testRate =
-          //     (100 * (3600 * (props.longRate.mean() || 0))) / v;
-          //   props.cusum =
-          //     testRate > -800 && testRate < -90
-          //       ? props.cusum + (testRate - -90)
-          //       : Math.min(0, props.cusum + 10);
-          //   if (props.cusum < -120) {
-          //     trigger = { payload: false }; // OFF payload
-          //     // props = initProps(); // TBC
-          //   }
-          // }
         }
         props.before = now;
 
@@ -135,6 +119,17 @@ const nodeInit = (RED) => {
         const st = props.slowFilter.stddev() || 0;
         const k = props.slowFilter.K[0];
         const nrg = props.energy / 3600;
+
+        // display velocity, in % per hour
+        const relVel = (v && ((props.velocity.mean() || 0) * 3600) / v) || 0;
+        const dispVel =
+          Math.sign(relVel) * Math.floor(Math.abs(relVel) / 0.1) * 0.1;
+        let dir = "→";
+        if (dispVel < -1) dir = "↓";
+        else if (dispVel < -0.5) dir = "↘";
+        if (dispVel > 1) dir = "↑";
+        else if (dispVel > 0.5) dir = "↗";
+
         if (v < 2 * pvStdDev) {
           node.status({
             fill: "red",
@@ -144,11 +139,9 @@ const nodeInit = (RED) => {
           props = initProps();
         } else {
           node.status({
-            fill: "green",
+            fill: props.cusum < 0.24 * t ? "green" : "yellow",
             shape: "ring",
-            text: `${v.toFixed(2)} W (±${st.toFixed(2)}) - total ${nrg.toFixed(
-              1
-            )} Wh - K ${k.toFixed(3)}`,
+            text: `${dir} ${v.toFixed(2)} W - total ${nrg.toFixed(1)} Wh`,
           });
         }
 
@@ -156,12 +149,10 @@ const nodeInit = (RED) => {
 
         send([
           { payload: v, topic: "value" },
-          { payload: st, topic: "stddev" },
-          validSpeed
-            ? { payload: props.velocity.mean() || 0, topic: "rate" }
-            : null,
-          validSpeed ? { payload: props.accel.sg(), topic: "accel" } : null,
+          validSpeed ? { payload: dispVel, topic: "rate" } : null,
           null,
+          // { payload: st, topic: "stddev" },
+          // validSpeed ? { payload: props.accel.sg(), topic: "accel" } : null,
         ]);
       } else {
         node.status({ fill: "red", shape: "dot", text: "Bad input value" });
