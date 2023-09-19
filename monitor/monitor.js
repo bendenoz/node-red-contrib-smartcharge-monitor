@@ -7,16 +7,18 @@ const fs = require("fs");
 
 // Detection constants base on relative velocity
 
-/** stdev */
-const sigma = 0.98;
+/** stdev (of relVel) */
+const sigma = 1;
 /** relative tolerance */
-const w = 0.15 * sigma;
+const w = 0.2 * sigma;
 /** relative average */
 const avg = -0.5;
-/** relative threshold */
-const t = 20;
+
+/** relVel cusum threshold */
+const t = 18; // FIXME should be related to timestep...
+
 /** Too high velocity, ignore "jumps" */
-const maxScore = 8;
+const maxScore = 8; // aka 800%
 
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
@@ -36,9 +38,9 @@ const nodeInit = (RED) => {
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        fastFilter: new KalmanFilter(0.05, 20, 60), // our actual filter
+        fastFilter: new KalmanFilter(0.05, 20 /* timestep - FIXME option */, 60), // our actual filter
         slowFilter: new KalmanFilter(0.05, 20, 3600), // used for display
-        velocity: new IIRFilter(15), // used for display
+        velocity: new IIRFilter(12), // used for display
         accel: new RollingDerivate(20), // in W/s^2, not used
         before: 0,
         cusum: 0,
@@ -99,14 +101,17 @@ const nodeInit = (RED) => {
                 ]);
               }, 5000);
             }
-            if (props.slowFilter.count() > 1) {
+            if (props.slowFilter.count() > 6) {
               props.velocity.push(spdFast * 0.6 + spdSlow * 0.4);
             } else {
+              // or just ignore the first few samples
               props.velocity.push(0);
             }
           } else {
+            // step change detected, reset everything
             props.cusum = 0;
             props.slowFilter.resetCovariance(pv);
+            props.velocity.reset();
           }
 
           // update cumul
@@ -123,7 +128,7 @@ const nodeInit = (RED) => {
         // display velocity, in % per hour
         const relVel = (v && ((props.velocity.mean() || 0) * 3600) / v) || 0;
         const dispVel =
-          Math.sign(relVel) * Math.floor(Math.abs(relVel) / 0.1) * 0.1;
+          Math.sign(relVel) * Math.floor(Math.abs(relVel) / 0.01) * 0.01;
         let dir = "→";
         if (dispVel < -1) dir = "↓";
         else if (dispVel < -0.5) dir = "↘";
