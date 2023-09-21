@@ -10,12 +10,7 @@ const fs = require("fs");
 /** stdev (of relVel) */
 const sigma = 1;
 /** relative tolerance */
-const w = 0.2 * sigma;
-/** relative average */
-const avg = -0.5;
-
-/** relVel cusum threshold */
-const t = 18; // FIXME should be related to timestep...
+const w = 0.0 * sigma;
 
 /** Too high velocity, ignore "jumps" */
 const maxScore = 8; // aka 800%
@@ -30,7 +25,14 @@ const nodeInit = (RED) => {
 
     RED.nodes.createNode(this, config);
     const node = this;
+    /** @type {number} */
     const pvStdDev = config.stddev || 0.05;
+    /** @type {number} timestep in seconds */
+    const timestep = config.timestep || 20;
+    /** @type {number} relative average */
+    const avg = config.avg || -0.5;
+    /** @type {number} relVel cusum threshold */
+    const t = config.rateMinutes || 6; // %rate . minutes
 
     /** @type {import("./types").Props} */
     let props;
@@ -38,8 +40,8 @@ const nodeInit = (RED) => {
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        fastFilter: new KalmanFilter(0.05, 20 /* timestep - FIXME option */, 60), // our actual filter
-        slowFilter: new KalmanFilter(0.05, 20, 3600), // used for display
+        fastFilter: new KalmanFilter(0.05, timestep, 160), // our actual filter
+        slowFilter: new KalmanFilter(0.05, timestep, 4800), // used for display
         velocity: new IIRFilter(12), // used for display
         accel: new RollingDerivate(20), // in W/s^2, not used
         before: 0,
@@ -89,7 +91,10 @@ const nodeInit = (RED) => {
           const relVel = (valFast && ((spdFast || 0) * 3600) / valFast) || 0;
           const zScore = (relVel - avg) / sigma;
           if (Math.abs(zScore) < maxScore) {
-            props.cusum = Math.max(0, props.cusum - zScore - w);
+            props.cusum = Math.max(
+              0,
+              props.cusum - ((zScore + w) * timestep) / 60
+            );
             if (props.cusum > t) {
               props.cusum = 0;
               // wrap in timeout to avoid simultaneous read / write on some devices (meross)

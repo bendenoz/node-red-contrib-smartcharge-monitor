@@ -7,6 +7,7 @@ export type Props = {
   slowFilter: KalmanFilter;
   fastFilter: KalmanFilter;
   accel: RollingDerivate;
+  /** display velocity */
   velocity: IIRFilter;
   /** last timestamp */
   before: number;

@@ -5,6 +5,9 @@
     defaults: {
       name: { value: "" },
       stddev: { value: 0.05 },
+      timestep: { value: 20 },
+      rateMinutes: { value: 6 },
+      threshold: { value: -0.5 },
     },
     inputs: 1,
     outputs: 3,
@@ -22,12 +25,24 @@
 
 <script type="text/html" data-template-name="smartcharge-monitor">
   <div class="form-row">
-    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
-    <input type="text" id="node-input-name" placeholder="Name" />
+    <label for="node-input-timestep">Time step</label>
+    <input type="text" id="node-input-timestep" />
   </div>
   <div class="form-row">
-    <label for="node-input-name"><i class="fa fa-tag"></i> Standard Dev</label>
+    <label for="node-input-stddev">Standard Dev</label>
     <input type="text" id="node-input-stddev" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-rateMinutes">Rate-minutes</label>
+    <input type="text" id="node-input-rateMinutes" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-threshold">Threshold</label>
+    <input type="text" id="node-input-threshold" />
+  </div>
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name" />
   </div>
 </script>
 
