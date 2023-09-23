@@ -3,25 +3,22 @@ const { KalmanFilter } = require("./kalman-filter");
 const { SimpleKalmanFilter } = require("./simple-kalman-filter");
 const { RollingDerivate } = require("./sg-derivate");
 
-const fs = require("fs");
+// const fs = require("fs");
 
 // Detection constants base on relative velocity
 
 /** stdev (of relVel) */
 const sigma = 1;
 /** relative tolerance */
-const w = 0.0 * sigma;
-
-/** Too high velocity, ignore "jumps" */
-const maxScore = 8; // aka 800%
+const w = 0.25 * sigma;
 
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
   /** @this {import("node-red").Node} */
   function Monitor(config) {
     // DEBUG
-    const fdata = `/tmp/data-${new Date().toISOString()}.csv`;
-    fs.appendFileSync(fdata, "timestamp,value\n");
+    // const fdata = `/tmp/data-${new Date().toISOString()}.csv`;
+    // fs.appendFileSync(fdata, "timestamp,value\n");
 
     RED.nodes.createNode(this, config);
     const node = this;
@@ -29,10 +26,8 @@ const nodeInit = (RED) => {
     const pvStdDev = config.stddev || 0.05;
     /** @type {number} timestep in seconds */
     const timestep = config.timestep || 20;
-    /** @type {number} relative average */
-    const avg = config.avg || -0.5;
     /** @type {number} relVel cusum threshold */
-    const t = config.rateMinutes || 6; // %rate . minutes
+    const rateMinutes = config.rateMinutes || 8; // %rate . minutes
 
     /** @type {import("./types").Props} */
     let props;
@@ -59,7 +54,7 @@ const nodeInit = (RED) => {
       if (pv !== null && !isNaN(pv) && isFinite(pv)) {
         const now = performance.now();
 
-        fs.appendFileSync(fdata, `${now},${pv}\n`);
+        // fs.appendFileSync(fdata, `${now},${pv}\n`);
 
         const lastValue = props.slowFilter.mean()[0];
         props.slowFilter.push(pv);
@@ -89,13 +84,14 @@ const nodeInit = (RED) => {
           const dt = (now - props.before) / 1e3;
 
           const relVel = (valFast && ((spdFast || 0) * 3600) / valFast) || 0;
-          const zScore = (relVel - avg) / sigma;
-          if (Math.abs(zScore) < maxScore) {
+          const zScore = (relVel - 0) / sigma;
+          // If in slow and safe change rate
+          if (-8 < zScore && zScore < 2) {
             props.cusum = Math.max(
               0,
               props.cusum - ((zScore + w) * timestep) / 60
             );
-            if (props.cusum > t) {
+            if (props.cusum >= rateMinutes) {
               props.cusum = 0;
               // wrap in timeout to avoid simultaneous read / write on some devices (meross)
               setTimeout(() => {
@@ -106,16 +102,17 @@ const nodeInit = (RED) => {
                 ]);
               }, 5000);
             }
-            if (props.slowFilter.count() > 6) {
+            if (props.fastFilter.count() > 6) {
               props.velocity.push(spdFast * 0.6 + spdSlow * 0.4);
             } else {
-              // or just ignore the first few samples
+              // or just ignore the first couple of minutes
               props.velocity.push(0);
             }
           } else {
-            // step change detected, reset everything
+            // or assume step change detected, reset everything
             props.cusum = 0;
             props.slowFilter.resetCovariance(pv);
+            props.fastFilter.resetCovariance(pv);
             props.velocity.reset();
           }
 
@@ -131,9 +128,12 @@ const nodeInit = (RED) => {
         const nrg = props.energy / 3600;
 
         // display velocity, in % per hour
-        const relVel = (v && ((props.velocity.mean() || 0) * 3600) / v) || 0;
+        const slowRelVel =
+          (v && ((props.velocity.mean() || 0) * 3600) / v) || 0;
         const dispVel =
-          Math.sign(relVel) * Math.floor(Math.abs(relVel) / 0.01) * 0.01;
+          Math.sign(slowRelVel) *
+          Math.floor(Math.abs(slowRelVel) / 0.01) *
+          0.01;
         let dir = "→";
         if (dispVel < -1) dir = "↓";
         else if (dispVel < -0.5) dir = "↘";
@@ -149,7 +149,7 @@ const nodeInit = (RED) => {
           props = initProps();
         } else {
           node.status({
-            fill: props.cusum < 0.24 * t ? "green" : "yellow",
+            fill: props.cusum < 0.25 * rateMinutes ? "green" : "yellow",
             shape: "ring",
             text: `${dir} ${v.toFixed(2)} W - total ${nrg.toFixed(1)} Wh`,
           });

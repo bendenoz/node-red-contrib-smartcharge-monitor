@@ -75,7 +75,7 @@ class KalmanFilter {
           // (this.stdev / ((8 * 10) / this.timestep)) ** 2, // stdev ** 2 / 10 ** 1, // best i test  / 3 - 5
           // (this.stdev / ((this.velAvg * 10) / this.timestep)) ** 2, // we want stable velocity in w/h // best i test / 200 - 500 - 3 / 20 + 3 / 2000 ?
           (this.stdev ** 2 * this.timestep) / this.velAvg,
-          ((this.stdev ** 2) ** 2 * this.timestep) / this.velAvg
+          ((this.stdev ** 2) ** 2 * this.timestep) / this.velAvg,
         ], // gain of 0.12856 (~20 samples) for value stabilized
       },
     });
