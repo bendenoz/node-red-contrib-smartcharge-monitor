@@ -12,6 +12,13 @@ const sigma = 1;
 /** relative tolerance */
 const w = 0.25 * sigma;
 
+/**
+ * Round to nearest stdev below
+ * @param {number} v
+ */
+const floorVal = (v, stdev = 0.5) =>
+  Math.sign(v) * Math.floor(Math.abs(v) / stdev) * stdev;
+
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
   /** @this {import("node-red").Node} */
@@ -27,7 +34,7 @@ const nodeInit = (RED) => {
     /** @type {number} timestep in seconds */
     const timestep = config.timestep || 20;
     /** @type {number} relVel cusum threshold */
-    const rateMinutes = config.rateMinutes || 8; // %rate . minutes
+    const rateMinutes = config.rateMinutes || 10; // %rate . minutes
 
     /** @type {import("./types").Props} */
     let props;
@@ -127,13 +134,10 @@ const nodeInit = (RED) => {
         const k = props.slowFilter.K[0];
         const nrg = props.energy / 3600;
 
+        // display velocity, in W per hour, rounded to aribtrary stdev of 0.5 W/h
+        const roundedVel = floorVal((props.velocity.mean() || 0) * 3600, 0.5);
         // display velocity, in % per hour
-        const slowRelVel =
-          (v && ((props.velocity.mean() || 0) * 3600) / v) || 0;
-        const dispVel =
-          Math.sign(slowRelVel) *
-          Math.floor(Math.abs(slowRelVel) / 0.01) *
-          0.01;
+        const dispVel = (v && roundedVel / v) || 0;
         let dir = "→";
         if (dispVel < -1) dir = "↓";
         else if (dispVel < -0.5) dir = "↘";
