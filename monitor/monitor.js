@@ -1,4 +1,4 @@
-const { performance } = require('perf_hooks'); // not needed for node > ??
+const { performance } = require("perf_hooks"); // not needed for node > ??
 
 const { IIRFilter } = require("./iir-filter");
 const { KalmanFilter } = require("./kalman-filter");
@@ -60,6 +60,13 @@ const nodeInit = (RED) => {
     node.on("input", (msg, send, done) => {
       const pv = Number(msg.payload);
 
+      // Node-RED 0.x compat - https://nodered.org/docs/creating-nodes/node-js#sending-messages
+      const nodeSend =
+        send ||
+        function () {
+          node.send.apply(node, arguments);
+        };
+
       if (pv !== null && !isNaN(pv) && isFinite(pv)) {
         const now = performance.now();
 
@@ -104,7 +111,7 @@ const nodeInit = (RED) => {
               props.cusum = 0;
               // wrap in timeout to avoid simultaneous read / write on some devices (meross)
               setTimeout(() => {
-                send([
+                nodeSend([
                   null,
                   null,
                   { payload: false }, // OFF payload
@@ -163,7 +170,7 @@ const nodeInit = (RED) => {
 
         const validSpeed = props.slowFilter.count() >= 2;
 
-        send([
+        nodeSend([
           { payload: v, topic: "value" },
           validSpeed ? { payload: dispVel, topic: "rate" } : null,
           null,
@@ -173,7 +180,7 @@ const nodeInit = (RED) => {
       } else {
         node.status({ fill: "red", shape: "dot", text: "Bad input value" });
       }
-      done();
+      if (done) done();
     });
 
     node.on("close", () => {
