@@ -39,9 +39,9 @@ const vv2 = [
     20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
     20, 20, 20, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3,
     2, 1,
-  ].map(v => v*20),
+  ].map((v) => v * 20),
 ];
-const kf2 = new KalmanFilter(0.05, 20);
+const kf2 = new KalmanFilter(0.05, 20, 200);
 
 vv2.forEach((v) => {
   kf2.push(v);
@@ -59,10 +59,10 @@ const vv3 = [
   2.01, 2.0, 2.02, 1.98, 2.0, 2.01, 2.0, 2.02, 1.99, 2.0, 1.98, 2.01, 2.0, 2.02,
   1.98, 2.0, 2.01, 2.0, 2.02, 1.99, 2.0, 1.98, 2.01, 2.0, 2.02, 1.98, 2.0,
 ];
-const kf3 = new KalmanFilter(0.05, 20);
-// const kf3 = kf2;
+// const kf3 = new KalmanFilter(0.05, 20);
+const kf3 = kf2;
 
-// kf3.resetCovariance();
+kf3.resetCovariance(2.01);
 // console.log(kf3.value.covariance);
 console.log(kf3.state);
 console.log(kf3.kf?.getPredictedCovariance({ previousCorrected: kf3.state }));
