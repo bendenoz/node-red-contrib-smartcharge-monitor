@@ -2,6 +2,7 @@
 
 const KalmanClass = require("kalman-filter/lib/kalman-filter");
 const StateType = require("kalman-filter/lib/state");
+const { performance } = require("perf_hooks"); // not needed for node > ??
 
 require("kalman-filter"); // must be required to init default models
 
@@ -12,73 +13,95 @@ class KalmanFilter {
   /** @type {StateType | null} */
   state = null;
 
-  /** @type {[number, number]} */
-  K = [0, 0];
+  /** @type {[number, number, number]} */
+  K = [0, 0, 0];
 
   /**
-   * sample interval, in seconds
+   * previous timestamp, in milliseconds
    * @type {number}
    */
-  timestep;
+  lastT;
 
   /**
-   * process std dev
+   * process kStd dev
    * @type {number}
    */
-  stdev;
+  kStdev;
 
   /**
-   * speed average factor
-   * @type {number}
+   * @param {number} kStdev process std dev
    */
-  velAvg;
-
-  /**
-   * @param {number} stdev process std dev
-   * @param {number} timestep sample interval, in seconds
-   */
-  constructor(stdev, timestep, velAvg = 160) {
-    this.timestep = timestep;
-    this.stdev = stdev;
-    this.velAvg = velAvg;
+  constructor(kStdev) {
+    this.kStdev = kStdev;
   }
 
   /**
    * Instanciate kalman filter with value
    * @param {number} initValue
    */
-  init(initValue) {
-    this.kf = new KalmanClass({
-      observation: {
-        dimension: 1,
-        // R
-        covariance: [this.stdev ** 2], // diag if not a matrix
-      },
-      dynamic: {
-        // name: "constant-speed",
-        dimension: 2,
-        init: {
-          mean: [[initValue], [0]],
-          // Initial P
-          covariance: [
-            [10, 0],
-            [0, 10 ** -4.5],
-          ],
-          index: -1,
+  init(initValue, initTs = performance.now()) {
+    try {
+      this.kf = new KalmanClass({
+        observation: {
+          dimension: 1,
+          // R
+          covariance: (...args) => {
+            const { observation, predicted } = args[0];
+            const obsStdev = 1;
+            const pwr =
+              observation !== undefined
+                ? observation[0][0]
+                : predicted.mean[0][0];
+            return [[Math.max(obsStdev, 0.05 * (pwr || 1)) ** 2]];
+          },
         },
-        transition: [
-          [1, this.timestep],
-          [0, 1],
-        ],
-        // Q
-        covariance: [
-          // (this.stdev / ((8 * 10) / this.timestep)) ** 2, // stdev ** 2 / 10 ** 1, // best i test  / 3 - 5
-          // (this.stdev / ((this.velAvg * 10) / this.timestep)) ** 2, // we want stable velocity in w/h // best i test / 200 - 500 - 3 / 20 + 3 / 2000 ?
-          (this.stdev ** 2 * this.timestep) / this.velAvg,
-          ((this.stdev ** 2) ** 2 * this.timestep) / this.velAvg,
-        ], // gain of 0.12856 (~20 samples) for value stabilized
-      },
-    });
+        dynamic: {
+          // name: "exponential decay",
+          dimension: 3,
+          init: {
+            mean: [[initValue], [0], [0]],
+            // Initial P
+            covariance: [
+              [10, 0, 0],
+              [0, 10, 0],
+              [0, 0, (this.kStdev * 10) ** 2],
+            ],
+            index: -1,
+          },
+          fn: ({ previousCorrected, timestep }) => {
+            const [pwr, rate, k] = previousCorrected.mean.map((a) => a[0]);
+            const target = 0;
+            return [[pwr + rate * timestep], [(target - pwr) * k], [k]];
+          },
+          transition: ({ previousCorrected, timestep }) => {
+            const [pwr, rate, k] = previousCorrected.mean.map((a) => a[0]);
+            const target = 0;
+            return [
+              [1, timestep, 0],
+              [-k, 0, target - pwr],
+              [0, 0, 1],
+            ];
+          },
+          // Q
+          covariance: ({
+            previousCorrected: {
+              mean: [, , k],
+            },
+          }) => {
+            // console.log(pwr);
+            return [
+              [0.01 ** 2, 0, 0],
+              [0, 0.1 ** 2, 0],
+              [0, 0, this.kStdev ** 2],
+            ];
+          },
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      throw e;
+    }
+    this.lastTS = initTs;
   }
 
   /** @param {number} initValue */
@@ -89,36 +112,63 @@ class KalmanFilter {
     this.state.index = -1;
     this.state.mean[0] = [initValue]; // reset init value
     this.state.mean[1] = [0]; // also reset velocity to 0
+    this.state.mean[2] = [0]; // also reset k to 0
     // TODO - just reset this.state and this.kf ?
     // TODO - replay last N samples
   }
 
   // Add a new data point
   /** @param {number} value */
-  push(value) {
-    if (!this.kf) this.init(value);
+  push(value, ts = performance.now()) {
+    if (!this.kf) {
+      this.init(value, ts);
+      return;
+    }
     if (!this.kf) throw new Error("No KF instance");
 
-    const predicted = this.kf.predict({
-      previousCorrected: this.state,
-    });
+    const timestep = this.predict(ts);
 
-    this.K = /** @type {[number, number]} */ (
-      this.kf.getGain({ predicted }).map(([v]) => v)
+    this.K = /** @type {[number, number, number]} */ (
+      this.kf.getGain({ predicted: this.state }).map(([v]) => v)
     );
     // console.log('gain', this.gain);
 
-    const correctedState = this.kf.correct({
-      predicted,
-      observation: [value],
-    });
-
-    this.state = correctedState;
+    this.correct(value, timestep);
   }
 
-  /** @return {(number | null)[]} */
+  /** Returns timestep in seconds, used by correct */
+  predict(ts = performance.now()) {
+    if (!this.kf || !this.lastTS) throw new Error("No KF instance");
+    const timestep = (ts - this.lastTS) / 1000;
+    const predicted = this.kf.predict({
+      previousCorrected: this.state,
+      timestep,
+    });
+    this.state = predicted;
+    this.lastTS = ts;
+    return timestep;
+  }
+
+  /**
+   * @param {number} value
+   * @param {number} timestep
+   */
+  correct(value, timestep) {
+    if (!this.kf) throw new Error("No KF instance");
+    const corrected = this.kf.correct({
+      predicted: this.state,
+      observation: [value],
+      timestep,
+    });
+
+    this.state = corrected;
+  }
+
+  /** @return {[number | null, number | null, number | null]} */
   mean() {
-    return this.state === null ? [null, null] : this.state.mean.map(([v]) => v);
+    return this.state === null
+      ? [null, null, null]
+      : this.state.mean.map(([v]) => v);
   }
 
   count() {

@@ -6,12 +6,14 @@ import { RollingDerivate } from "./sg-derivate";
 export type Props = {
   slowFilter: KalmanFilter;
   fastFilter: KalmanFilter;
-  accel: RollingDerivate;
   /** display velocity */
-  velocity: IIRFilter;
+  acceleration: IIRFilter;
   /** last timestamp */
   before: number;
   cusum: number;
   /** Total Ws */
   energy: number;
+  /** Battery capacity, derived from last value */
+  battCap: number;
+  timeout: ReturnType<typeof setTimeout> | null;
 };

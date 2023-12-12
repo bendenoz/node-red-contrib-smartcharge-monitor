@@ -6,13 +6,13 @@
       name: { value: "" },
       stddev: { value: 0.05 },
       timestep: { value: 20 },
-      rateMinutes: { value: 8 },
+      cutoff: { value: 85 },
     },
     inputs: 1,
     outputs: 3,
     outputLabels: [
-      "Power, in Watt",
-      "Relative power change rate, in % per hour",
+      "Charge power, in Watt",
+      "Charge acceleration, in % per hour",
       "OFF trigger",
     ],
     icon: "function.svg",
@@ -24,16 +24,8 @@
 
 <script type="text/html" data-template-name="smartcharge-monitor">
   <div class="form-row">
-    <label for="node-input-timestep">Time step</label>
-    <input type="text" id="node-input-timestep" />
-  </div>
-  <div class="form-row">
-    <label for="node-input-stddev">Standard Dev</label>
-    <input type="text" id="node-input-stddev" />
-  </div>
-  <div class="form-row">
-    <label for="node-input-rateMinutes">Rate-minutes</label>
-    <input type="text" id="node-input-rateMinutes" />
+    <label for="node-input-cutoff">Target charge (82% - 95%)</label>
+    <input type="text" id="node-input-cutoff" />
   </div>
   <div class="form-row">
     <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
