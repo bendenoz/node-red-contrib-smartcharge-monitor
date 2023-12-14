@@ -9,8 +9,14 @@ const { RollingDerivate } = require("./sg-derivate");
 
 // Detection constants base on relative velocity
 
-/** cusum min */
-const w = 0.05; // zero works too...
+/** cusum min k value*/
+const w = 0.5;
+
+/** Cut-off voltage capacity - see [battery university](https://batteryuniversity.com/article/bu-409-charging-lithium-ion) article */
+const cutOffCap = 84.5;
+
+/** Charger efficiency */
+const chargerEfficiency = 0.8;
 
 /**
  * Round to nearest stdev below
@@ -38,7 +44,7 @@ const nodeInit = (RED) => {
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        fastFilter: new KalmanFilter(0.001), // our actual filter
+        fastFilter: new KalmanFilter(0.003), // our actual filter
         slowFilter: new KalmanFilter(0.0002), // used for display
         acceleration: new IIRFilter(12), // (not) used for display
         before: 0,
@@ -72,13 +78,17 @@ const nodeInit = (RED) => {
        */
       const evalCusum = (timestep) => {
         const [valFast, , kFast] = props.fastFilter.mean();
-        if (kFast === null || valFast === null) return;
+        if (kFast === null || valFast === null) return false;
 
-        const t = Math.log(1 / (1 - (maxCharge - 83) / (100 - 83))); // FIXME hard coded 83
+        const t = Math.log(
+          1 / (1 - (maxCharge - cutOffCap) / (100 - cutOffCap))
+        );
         /** k in hour^-1 */
         const kH = kFast * 3600;
 
-        props.cusum = Math.max(0, props.cusum + (kH - w) * (timestep / 3600));
+        const inc = (kH - w) * (timestep / 3600);
+        props.cusum = Math.max(0, props.cusum + inc);
+        if (inc > 0) props.cusum += w * (timestep / 3600); // compensate for threshold in our integral
 
         // node.log(
         //   JSON.stringify({
@@ -92,26 +102,42 @@ const nodeInit = (RED) => {
           // try to estimate battery capacity
           if (props.battCap === 0) {
             // cusum is t for a k of 1
-            const remainChargePct = (Math.exp(-props.cusum) * (100 - 83)) / 100; // FIXME hard coded 83
+            const remainChargePct =
+              (Math.exp(-props.cusum) * (100 - cutOffCap)) / 100;
             // deduce capacity from remaining charge, current value and decay constant
             if (remainChargePct > 0)
               // FIXME - Use average kH ?
-              props.battCap = (valFast * 0.8) / kH / remainChargePct; // FIXME hard coded .8
+              props.battCap =
+                (valFast * chargerEfficiency) / kH / remainChargePct;
           }
-          props.cusum = 0;
           node.log("Scheduling one time OFF");
           // wrap in timeout to avoid simultaneous read / write on some devices (meross)
           setTimeout(() => {
+            props.cusum = 0;
             nodeSend([
               null,
               null,
               { payload: false }, // OFF payload
             ]);
           }, 2000);
+          return true;
         }
+        return false;
       };
 
-      const sendResult = (/** @type {number} */ now) => {
+      const mainLoop = (
+        /** @type {number} */ now,
+        /** @type {number} */ timestep,
+        timeout = 5000
+      ) => {
+        if (props.timeout) {
+          clearTimeout(props.timeout);
+          props.timeout = null;
+        }
+
+        const fullCharge = evalCusum(timestep);
+        if (fullCharge) return;
+
         const [, accelSlow] = props.slowFilter.mean();
         const [valFast] = props.fastFilter.mean();
         if (valFast === null || accelSlow === null) return;
@@ -124,7 +150,7 @@ const nodeInit = (RED) => {
             props.before = now;
           } else {
             const dt = (now - props.before) / 1e3;
-            props.energy += valFast * dt;
+            props.energy += valFast * chargerEfficiency * dt;
             props.before = now;
           }
 
@@ -162,24 +188,17 @@ const nodeInit = (RED) => {
           null,
         ]);
 
-        if (!props.timeout)
-          props.timeout = setTimeout(() => {
-            // in timeout loop => predicts, evaluate cusum, pushResult
-            props.timeout = null;
-            const nextNow = performance.now();
-            const ts1 = props.fastFilter.predict(nextNow);
-            const ts2 = props.slowFilter.predict(nextNow);
-            evalCusum(ts1);
-            sendResult(nextNow);
-          }, 5000);
+        props.timeout = setTimeout(() => {
+          // in timeout loop => predicts, evaluate cusum, pushResult
+          const nextNow = performance.now();
+          const ts1 = props.fastFilter.predict(nextNow);
+          const ts2 = props.slowFilter.predict(nextNow);
+          mainLoop(nextNow, ts1);
+        }, timeout);
       };
 
       if (pv !== null && !isNaN(pv) && isFinite(pv)) {
         // in value => predicts, check for reset (filter, cusum, not energy?), or correct, evaluate cusum, pushResult
-        if (props.timeout) {
-          clearTimeout(props.timeout);
-          props.timeout = null;
-        }
 
         const now = performance.now();
 
@@ -204,9 +223,8 @@ const nodeInit = (RED) => {
         } else {
           props.slowFilter.correct(pv, ts1);
           props.fastFilter.correct(pv, ts2);
-          evalCusum(ts1);
         }
-        sendResult(now);
+        mainLoop(now, ts1, 5500);
       } else {
         node.status({ fill: "red", shape: "dot", text: "Bad input value" });
       }
@@ -214,6 +232,7 @@ const nodeInit = (RED) => {
     });
 
     node.on("close", () => {
+      if (props.timeout) clearTimeout(props.timeout);
       props = initProps();
     });
   }

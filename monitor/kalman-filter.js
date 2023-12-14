@@ -88,7 +88,6 @@ class KalmanFilter {
               mean: [, , k],
             },
           }) => {
-            // console.log(pwr);
             return [
               [0.01 ** 2, 0, 0],
               [0, 0.1 ** 2, 0],
