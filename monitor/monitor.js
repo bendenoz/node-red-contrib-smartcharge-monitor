@@ -7,16 +7,23 @@ const { RollingDerivate } = require("./sg-derivate");
 
 // const fs = require("fs");
 
-// Detection constants base on relative velocity
+const stdKFast = 1e-5;
+const stdKSlow = 1e-7;
 
-/** cusum min k value*/
+/** cusum mini k value*/
 const w = 0.5;
 
 /** Cut-off voltage capacity - see [battery university](https://batteryuniversity.com/article/bu-409-charging-lithium-ion) article */
-const cutOffCap = 84.5;
+const cutOffCap = 84;
 
 /** Charger efficiency */
 const chargerEfficiency = 0.8;
+
+/** noise distribution around 1.5 cusum minutes */
+const distrib = (x, mean = 1.5, sigma = 0.3) => {
+  var exponent = -((x - mean) ** 2) / (2 * sigma ** 2);
+  return Math.exp(exponent);
+};
 
 /**
  * Round to nearest stdev below
@@ -44,14 +51,17 @@ const nodeInit = (RED) => {
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        fastFilter: new KalmanFilter(0.003), // our actual filter
-        slowFilter: new KalmanFilter(0.0002), // used for display
+        fastFilter: new KalmanFilter(stdKFast), // our actual filter
+        slowFilter: new KalmanFilter(stdKSlow), // used for display
         acceleration: new IIRFilter(12), // (not) used for display
         before: 0,
         cusum: 0,
+        decaying: props ? props.decaying : false,
         energy: props ? props.energy : 0,
         battCap: props ? props.battCap : 0,
-        timeout: null,
+        maxPwr: props ? props.maxPwr : 0,
+        timeout: props ? props.timeout : null,
+        finishing: false,
       };
       p.fastFilter.init(0);
       p.slowFilter.init(0);
@@ -59,6 +69,7 @@ const nodeInit = (RED) => {
     };
 
     props = initProps();
+    node.log("Props initialized");
 
     node.on("input", (msg, send, done) => {
       const pv = Number(msg.payload);
@@ -71,24 +82,49 @@ const nodeInit = (RED) => {
         };
 
       /**
-       * Integrate over the inverse of the decay time constant
-       * Assuming 80% SOC reached when decay is detected, this gives us
-       * a good approximation the state of charge between 82% - 95%
-       * @param {number} timestep
+       * Integrate over k, the inverse of the decay time constant
+       * Assuming k ~ 1/1h, it gives us a value in normalized "time" (RC = 1h, 50% = 0.7h, 95% = 3h)
+       * @param {number} timestep in seconds
        */
       const evalCusum = (timestep) => {
         const [valFast, , kFast] = props.fastFilter.mean();
-        if (kFast === null || valFast === null) return false;
+        const [valSlow, , kSlow] = props.slowFilter.mean();
+        if (
+          kFast === null ||
+          valFast === null ||
+          valSlow === null ||
+          kSlow === null
+        )
+          return false;
 
-        const t = Math.log(
-          1 / (1 - (maxCharge - cutOffCap) / (100 - cutOffCap))
-        );
+        // const t =
+        //   60 * Math.log(1 / (1 - (maxCharge - cutOffCap) / (100 - cutOffCap)));
+        const t = (100 - maxCharge) / (100 - cutOffCap);
         /** k in hour^-1 */
         const kH = kFast * 3600;
 
-        const inc = (kH - w) * (timestep / 3600);
+        const prevCusum = props.cusum;
+        /** in minutes */
+        const inc = (kH - w) * (timestep / 60);
         props.cusum = Math.max(0, props.cusum + inc);
-        if (inc > 0) props.cusum += w * (timestep / 3600); // compensate for threshold in our integral
+        if (inc > 0) props.cusum += w * (timestep / 60); // compensate for threshold in our integral
+
+        // save max power for later
+        if (props.cusum === 0) props.maxPwr = valSlow;
+
+        // adjust noise during model change detection
+        props.slowFilter.kStdev =
+          stdKSlow + distrib(props.cusum) * (0.8 * stdKFast - stdKSlow);
+
+        if (props.slowFilter.state) {
+          if (props.cusum >= 0.8 && prevCusum < 0.8) {
+            // threshold up
+            props.decaying = true;
+          } else if (props.cusum <= 0.6 && prevCusum > 0.6) {
+            // threshold down
+            props.decaying = false;
+          }
+        }
 
         // node.log(
         //   JSON.stringify({
@@ -96,29 +132,42 @@ const nodeInit = (RED) => {
         //     t,
         //     kFast: kH,
         //     valFast,
+        //     kSlow: kSlow * 3600,
         //   })
         // );
-        if (props.cusum > t) {
-          // try to estimate battery capacity
-          if (props.battCap === 0) {
-            // cusum is t for a k of 1
-            const remainChargePct =
-              (Math.exp(-props.cusum) * (100 - cutOffCap)) / 100;
-            // deduce capacity from remaining charge, current value and decay constant
-            if (remainChargePct > 0)
-              // FIXME - Use average kH ?
-              props.battCap =
-                (valFast * chargerEfficiency) / kH / remainChargePct;
+        // cusum aka t for a k of 1/1hr
+        if (
+          props.decaying &&
+          props.maxPwr &&
+          !props.finishing &&
+          valFast <= props.maxPwr * t
+        ) {
+          if (
+            props.battCap === 0 &&
+            kSlow &&
+            props.cusum / (kSlow * 3600) >= 10
+          ) {
+            // try to estimate battery capacity from remaining charge, max value and decay constant
+            props.battCap =
+              (props.maxPwr * chargerEfficiency) /
+              (kSlow * 3600) /
+              ((100 - cutOffCap) / 100);
           }
-          node.log("Scheduling one time OFF");
-          // wrap in timeout to avoid simultaneous read / write on some devices (meross)
+          node.log(
+            `Scheduling one time OFF, ${valFast.toFixed(
+              1
+            )} / ${props.maxPwr.toFixed(1)} W, k=${(kSlow * 3600).toFixed(2)}`
+          );
+          props.finishing = true;
+          // wrap in timeout to avoid simultaneous read / write on some devices (Meross)
           setTimeout(() => {
-            props.cusum = 0;
-            nodeSend([
-              null,
-              null,
-              { payload: false }, // OFF payload
-            ]);
+            // props.finishing is reset on reset condition
+            if (props.finishing)
+              nodeSend([
+                null,
+                null,
+                { payload: false }, // OFF payload
+              ]);
           }, 2000);
           return true;
         }
@@ -167,16 +216,16 @@ const nodeInit = (RED) => {
           });
         } else {
           // display acceleration, in Wh per hour^2, ie W/h, rounded to aribtrary stdev of 0.5 W/h
-          const roundedVel = floorVal((accelSlow || 0) * 3600, 0.5);
+          const roundedAccel = floorVal((accelSlow || 0) * 3600, 0.5);
           // display acceleration, in % per hour
-          const dispAccel = (valFast && roundedVel / valFast) || 0;
+          const dispAccel = (valFast && roundedAccel / valFast) || 0;
           let dir = "→";
           if (dispAccel < -1) dir = "↓";
           else if (dispAccel < -0.5) dir = "↘";
           if (dispAccel > 1) dir = "↑";
           else if (dispAccel > 0.5) dir = "↗";
           node.status({
-            fill: props.cusum < 0.05 ? "green" : "yellow",
+            fill: props.decaying ? "yellow" : "green",
             shape: "ring",
             text: `${dir} ${valFast.toFixed(2)} W - total ${nrg.toFixed(1)} Wh`,
           });
@@ -184,7 +233,10 @@ const nodeInit = (RED) => {
 
         nodeSend([
           { payload: valFast, topic: "value" }, // this is rate (Wh / h)
-          { payload: valFast && (3600 * accelSlow) / valFast, topic: "rate" }, // this is accel %(Wh / h^2)
+          {
+            payload: 3600 * accelSlow, // this is accel (Wh / h^2)
+            topic: "rate",
+          },
           null,
         ]);
 
@@ -214,8 +266,11 @@ const nodeInit = (RED) => {
           Math.abs((pv - predVal) / pv) > 0.1 // 10% step triggers a reset
         ) {
           // reset
+          node.log("Resetting filters");
           props.slowFilter.resetCovariance(pv);
           props.fastFilter.resetCovariance(pv);
+          props.decaying = false;
+          props.finishing = false;
           if (predVal === 0 && pv) {
             props.before = 0;
             props.cusum = 0;
@@ -232,7 +287,10 @@ const nodeInit = (RED) => {
     });
 
     node.on("close", () => {
-      if (props.timeout) clearTimeout(props.timeout);
+      if (props.timeout) {
+        clearTimeout(props.timeout);
+        props.timeout = null;
+      }
       props = initProps();
     });
   }

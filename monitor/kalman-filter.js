@@ -47,12 +47,11 @@ class KalmanFilter {
           // R
           covariance: (...args) => {
             const { observation, predicted } = args[0];
-            const obsStdev = 1;
             const pwr =
               observation !== undefined
                 ? observation[0][0]
                 : predicted.mean[0][0];
-            return [[Math.max(obsStdev, 0.05 * (pwr || 1)) ** 2]];
+            return [[Math.max(0.01, 0.001 * pwr) ** 2]];
           },
         },
         dynamic: {
@@ -61,11 +60,7 @@ class KalmanFilter {
           init: {
             mean: [[initValue], [0], [0]],
             // Initial P
-            covariance: [
-              [10, 0, 0],
-              [0, 10, 0],
-              [0, 0, (this.kStdev * 10) ** 2],
-            ],
+            covariance: [1e-1, 1e-6, 1e-9],
             index: -1,
           },
           fn: ({ previousCorrected, timestep }) => {
@@ -82,16 +77,17 @@ class KalmanFilter {
               [0, 0, 1],
             ];
           },
-          // Q
+          // Q (noise)
           covariance: ({
             previousCorrected: {
-              mean: [, , k],
+              mean: [pwr, , k],
             },
+            timestep,
           }) => {
             return [
-              [0.01 ** 2, 0, 0],
-              [0, 0.1 ** 2, 0],
-              [0, 0, this.kStdev ** 2],
+              [0, 0, 0],
+              [0, 0, 0],
+              [0, 0, this.kStdev ** 2 * timestep],
             ];
           },
         },
@@ -130,7 +126,6 @@ class KalmanFilter {
     this.K = /** @type {[number, number, number]} */ (
       this.kf.getGain({ predicted: this.state }).map(([v]) => v)
     );
-    // console.log('gain', this.gain);
 
     this.correct(value, timestep);
   }
