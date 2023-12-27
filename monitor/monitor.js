@@ -110,7 +110,7 @@ const nodeInit = (RED) => {
         if (inc > 0) props.cusum += w * (timestep / 60); // compensate for threshold in our integral
 
         // save max power for later
-        if (props.cusum === 0) props.maxPwr = valSlow;
+        if (props.cusum === 0) props.maxPwr = valFast;
 
         // adjust noise during model change detection
         props.slowFilter.kStdev =
@@ -142,12 +142,8 @@ const nodeInit = (RED) => {
           !props.finishing &&
           valFast <= props.maxPwr * t
         ) {
-          if (
-            props.battCap === 0 &&
-            kSlow &&
-            props.cusum / (kSlow * 3600) >= 10
-          ) {
-            // try to estimate battery capacity from remaining charge, max value and decay constant
+          if (props.battCap === 0 && kSlow && props.cusum >= 10) {
+            // try to estimate battery capacity from max value and decay constant
             props.battCap =
               (props.maxPwr * chargerEfficiency) /
               (kSlow * 3600) /
