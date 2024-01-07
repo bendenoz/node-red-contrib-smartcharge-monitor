@@ -87,7 +87,7 @@ class KalmanFilter {
             return [
               [0, 0, 0],
               [0, 0, 0],
-              [0, 0, this.kStdev ** 2 * timestep],
+              [0, 0, this.kStdev ** 2 * timestep ** 2],
             ];
           },
         },
@@ -172,8 +172,8 @@ class KalmanFilter {
   /** Approximate delay, in sample count */
   delay() {
     const K = this.K[0][0];
-    const count = -3 / Math.log(1 - K);
-    return (count - 1) / 3;
+    const tc = -1 / Math.log(1 - K);
+    return 2 * Math.log(2) * tc; // 1.4 time constant
   }
 
   // Get the current standard deviation
