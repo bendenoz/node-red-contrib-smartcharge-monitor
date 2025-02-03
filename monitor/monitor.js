@@ -82,8 +82,9 @@ const nodeInit = (RED) => {
        * Integrate over k, the inverse of the decay time constant
        * Assuming k ~ 1/1h, it gives us a value in normalized "time" (RC = 1h, 50% = 0.7h, 95% = 3h)
        * @param {number} timestep in seconds
+       * @param {number} now
        */
-      const evalCusum = (timestep) => {
+      const evalCusum = (timestep, now) => {
         const [val, k] = props.filter.mean();
         if (k === null || val === null) return false;
 
@@ -116,7 +117,7 @@ const nodeInit = (RED) => {
         if (
           props.decaying &&
           !props.finishing &&
-          (performance.now() - props.startTime) > 5 * 60e3 && // min 5 minutes
+          (now - props.startTime) > 5 * 60e3 && // min 5 minutes
           props.cusum > maxCusum
         ) {
           if (props.battCap === 0 && props.cusum >= 10) {
@@ -156,15 +157,15 @@ const nodeInit = (RED) => {
           props.timeout = null;
         }
 
-        const fullCharge = evalCusum(timestep);
+        const fullCharge = evalCusum(timestep, now);
         if (fullCharge) return;
 
         const [val, k] = props.filter.mean();
         if (val === null || k === null) return;
-        const accel = k * (0 - val);
+        const accel = ((now - props.startTime) > 5 * 60e3) ? k * (0 - val) : 0;
 
         if (val >= 0.05)
-          if (props.before === 0) {
+          if (props.before === 0 && !props.finishing) {
             // init our energy
             props.energy = 0;
             props.battCap = 0;
