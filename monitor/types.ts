@@ -4,10 +4,7 @@ import { SimpleKalmanFilter } from "./simple-kalman-filter";
 import { RollingDerivate } from "./sg-derivate";
 
 export type Props = {
-  slowFilter: KalmanFilter;
-  fastFilter: KalmanFilter;
-  /** display velocity */
-  acceleration: IIRFilter;
+  filter: KalmanFilter;
   /** last timestamp */
   before: number;
   /** Normalized time, in minutes, for a k of 1 h^1 */
@@ -21,4 +18,6 @@ export type Props = {
   timeout: ReturnType<typeof setTimeout> | null;
   decaying: boolean;
   finishing: boolean;
+  /** Charge start time */
+  startTime: number;
 };

@@ -13,8 +13,8 @@ class KalmanFilter {
   /** @type {StateType | null} */
   state = null;
 
-  /** @type {[number, number, number]} */
-  K = [0, 0, 0];
+  /** @type {[number, number]} */
+  K = [0, 0];
 
   /**
    * previous timestamp, in milliseconds
@@ -23,10 +23,16 @@ class KalmanFilter {
   lastT;
 
   /**
-   * process kStd dev
+   * process kStd dev (per second)
    * @type {number}
    */
   kStdev;
+
+  /**
+   * power noise (per watt / per second)
+   * @type {number}
+   */
+  pwrStdev = 0.0004;
 
   /**
    * @param {number} kStdev process std dev
@@ -45,49 +51,35 @@ class KalmanFilter {
         observation: {
           dimension: 1,
           // R
-          covariance: (...args) => {
-            const { observation, predicted } = args[0];
-            const pwr =
-              observation !== undefined
-                ? observation[0][0]
-                : predicted.mean[0][0];
-            return [[Math.max(0.01, 0.001 * pwr) ** 2]];
-          },
+          covariance: [[0.015 ** 2]], // TODO: Make adjustable
         },
         dynamic: {
           // name: "exponential decay",
-          dimension: 3,
+          dimension: 2,
           init: {
-            mean: [[initValue], [0], [0]],
+            mean: [[initValue], [0]],
             // Initial P
-            covariance: [1e-1, 1e-6, 1e-9],
+            covariance: [1e-1, 1e-6],
             index: -1,
           },
-          fn: ({ previousCorrected, timestep }) => {
-            const [pwr, rate, k] = previousCorrected.mean.map((a) => a[0]);
-            const target = 0;
-            return [[pwr + rate * timestep], [(target - pwr) * k], [k]];
-          },
           transition: ({ previousCorrected, timestep }) => {
-            const [pwr, rate, k] = previousCorrected.mean.map((a) => a[0]);
+            const [[pwr]] = previousCorrected.mean;
             const target = 0;
             return [
-              [1, timestep, 0],
-              [-k, 0, target - pwr],
-              [0, 0, 1],
+              [1, (target - pwr) * timestep],
+              [0, 1],
             ];
           },
           // Q (noise)
           covariance: ({
-            previousCorrected: {
-              mean: [pwr, , k],
-            },
+            previousCorrected: { mean: [[pwr]], },
             timestep,
           }) => {
+            const pwrNoise = this.pwrStdev * pwr * timestep;
+            const kNoise = this.kStdev * timestep;
             return [
-              [0, 0, 0],
-              [0, 0, 0],
-              [0, 0, this.kStdev ** 2 * timestep ** 2],
+              [pwrNoise ** 2, 0],
+              [0, kNoise ** 2],
             ];
           },
         },
@@ -106,10 +98,7 @@ class KalmanFilter {
     this.state.covariance = this.kf.getInitState().covariance;
     this.state.index = -1;
     this.state.mean[0] = [initValue]; // reset init value
-    this.state.mean[1] = [0]; // also reset velocity to 0
-    this.state.mean[2] = [0]; // also reset k to 0
-    // TODO - just reset this.state and this.kf ?
-    // TODO - replay last N samples
+    this.state.mean[1] = [0]; // also reset k to 0
   }
 
   // Add a new data point
@@ -123,7 +112,7 @@ class KalmanFilter {
 
     const timestep = this.predict(ts);
 
-    this.K = /** @type {[number, number, number]} */ (
+    this.K = /** @type {[number, number]} */ (
       this.kf.getGain({ predicted: this.state }).map(([v]) => v)
     );
 
@@ -161,7 +150,7 @@ class KalmanFilter {
   /** @return {[number | null, number | null, number | null]} */
   mean() {
     return this.state === null
-      ? [null, null, null]
+      ? [null, null]
       : this.state.mean.map(([v]) => v);
   }
 
