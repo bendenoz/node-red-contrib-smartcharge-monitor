@@ -1,9 +1,6 @@
 const { performance } = require("perf_hooks"); // not needed for node > ??
 
-const { IIRFilter } = require("./iir-filter");
 const { KalmanFilter } = require("./kalman-filter");
-const { SimpleKalmanFilter } = require("./simple-kalman-filter");
-const { RollingDerivate } = require("./sg-derivate");
 
 // const fs = require("fs");
 
