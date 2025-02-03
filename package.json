@@ -9,7 +9,7 @@
   ],
   "node-red": {
     "nodes": {
-      "monitor": "monitor/monitor.js"
+      "monitor": "dist/monitor/monitor.js"
     }
   },
   "devDependencies": {
