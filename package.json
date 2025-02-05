@@ -1,6 +1,6 @@
 {
   "name": "@bendenoz/node-red-smartcharge-monitor",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Node-RED custom node for intelligent monitoring and optimization of battery charging based on power consumption insights.",
   "repository": "git@github.com:bendenoz/nodered-contrib-smartcharge-monitor",
   "author": "Benjamin Denozière <benjamin@denoziere.net>",
@@ -10,7 +10,8 @@
   "node-red": {
     "nodes": {
       "monitor": "dist/monitor/monitor.js"
-    }
+    },
+    "version": ">=0.19.5"
   },
   "devDependencies": {
     "@babel/cli": "^7.23.0",
@@ -20,6 +21,9 @@
   },
   "dependencies": {
     "kalman-filter": "^2.3.0"
+  },
+  "engines": {
+    "node": ">=12.0.0"
   },
   "license": "MIT"
 }
