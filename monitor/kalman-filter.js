@@ -23,16 +23,16 @@ class KalmanFilter {
   lastT;
 
   /**
-   * process kStd dev (per second)
+   * k noise (per second)
    * @type {number}
    */
   kStdev;
 
   /**
-   * power noise (per watt / per second)
+   * power noise factor
    * @type {number}
    */
-  pwrStdev = 0.0004;
+  pwrStdevFactor = 200;
 
   /**
    * @param {number} kStdev process std dev
@@ -75,7 +75,9 @@ class KalmanFilter {
             previousCorrected: { mean: [[pwr]], },
             timestep,
           }) => {
-            const pwrNoise = this.pwrStdev * pwr * timestep;
+            const target = 0;
+            const rateNoise = (target - pwr) * timestep * this.kStdev;
+            const pwrNoise = this.pwrStdevFactor * rateNoise;
             const kNoise = this.kStdev * timestep;
             return [
               [pwrNoise ** 2, 0],
@@ -147,7 +149,7 @@ class KalmanFilter {
     this.state = corrected;
   }
 
-  /** @return {[number | null, number | null, number | null]} */
+  /** @return {[number | null, number | null]} */
   mean() {
     return this.state === null
       ? [null, null]

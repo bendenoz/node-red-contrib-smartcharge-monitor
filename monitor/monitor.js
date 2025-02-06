@@ -2,18 +2,18 @@ const { performance } = require("perf_hooks"); // not needed for node > ??
 
 const { KalmanFilter } = require("./kalman-filter");
 
-// const fs = require("fs");
+/** @typedef {import("node-red").NodeMessage} NodeMessage */
 
-const stdK = 1e-6;
+const stdK = 1e-6; // 0.8e-6 maybe
 
 /** cusum mini k value (in hours^-1) */
 const w = 1 / 6.66;
 
 /** Default charge at peak power - see [battery university](https://batteryuniversity.com/article/bu-409-charging-lithium-ion) article */
-const peakCharge = 80.5;
+const peakCharge = 81.5;
 
 /** Charger efficiency */
-const chargerEfficiency = 0.8;
+const chargerEfficiency = 0.67;
 
 /** noise distribution around 1.5 cusum minutes */
 const distrib = (x, mean = 1.5, sigma = 0.3) => {
@@ -65,27 +65,26 @@ const nodeInit = (RED) => {
     props = initProps();
     node.log("Props initialized");
 
-    node.on("input", (msg, send, done) => {
-      const pv = Number(msg.payload);
+    const mainLoop = (
+      /** @type {number} */ now,
+      /** @type {number} */ timestep,
+      /** @type {number} */ timeout = 5000,
+      /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend,
+    ) => {
+      if (props.timeout) {
+        clearTimeout(props.timeout);
+        props.timeout = null;
+      }
 
-      // Node-RED 0.x compat - https://nodered.org/docs/creating-nodes/node-js#sending-messages
-      const nodeSend =
-        send ||
-        function () {
-          node.send.apply(node, arguments);
-        };
+      const [val, k] = props.filter.mean();
+      if (val === null || k === null) return;
 
       /**
        * Integrate over k, the inverse of the decay time constant
        * Assuming k ~ 1/1h, it gives us a value in normalized "time" (RC = 1h, 50% = 0.7h, 95% = 3h)
-       * @param {number} timestep in seconds
-       * @param {number} now
+       * Returns true if we are full
        */
-      const evalCusum = (timestep, now) => {
-        const [val, k] = props.filter.mean();
-        if (k === null || val === null) return false;
-
-
+      const evalCusum = () => {
         const thr = (maxCharge - peakCharge) / (100 - peakCharge);
         const maxCusum = -Math.log(1 - thr)
 
@@ -117,109 +116,108 @@ const nodeInit = (RED) => {
           (now - props.startTime) > 5 * 60e3 && // min 5 minutes
           props.cusum > maxCusum
         ) {
-          if (props.battCap === 0 && props.cusum >= 10) {
-            // try to estimate battery capacity from max value and decay constant
-            props.battCap =
-              (props.maxPwr * chargerEfficiency) /
-              ((100 - peakCharge) / 100);
-          }
-          node.log(
-            `Scheduling one time OFF, ${val.toFixed(
-              1
-            )} / ${props.maxPwr.toFixed(1)} W, k=${(k * 3600).toFixed(2)}`
-          );
-          props.finishing = true;
-          // wrap in timeout to avoid simultaneous read / write on some devices (Meross)
-          setTimeout(() => {
-            // props.finishing is reset on reset condition
-            if (props.finishing)
-              nodeSend([
-                null,
-                null,
-                { payload: false }, // OFF payload
-              ]);
-          }, 2000);
           return true;
         }
         return false;
       };
 
-      const mainLoop = (
-        /** @type {number} */ now,
-        /** @type {number} */ timestep,
-        timeout = 5000
-      ) => {
-        if (props.timeout) {
-          clearTimeout(props.timeout);
-          props.timeout = null;
+      const fullCharge = evalCusum();
+      if (fullCharge) {
+        if (props.battCap === 0 && props.cusum >= 10) {
+          // try to estimate battery capacity from max value and decay constant
+          props.battCap =
+            (props.maxPwr * chargerEfficiency) /
+            ((100 - peakCharge) / 100);
         }
-
-        const fullCharge = evalCusum(timestep, now);
-        if (fullCharge) return;
-
-        const [val, k] = props.filter.mean();
-        if (val === null || k === null) return;
-        const accel = ((now - props.startTime) > 5 * 60e3) ? k * (0 - val) : 0;
-
-        if (val >= 0.05)
-          if (props.before === 0 && !props.finishing) {
-            // init our energy
-            props.energy = 0;
-            props.battCap = 0;
-            props.before = now;
-          } else {
-            const dt = (now - props.before) / 1e3;
-            props.energy += val * chargerEfficiency * dt;
-            props.before = now;
-          }
-
-        /** in Wh */
-        const nrg = props.energy / 3600;
-
-        if (val < 0.05) {
-          node.status({
-            fill: "red",
-            shape: "ring",
-            text: `No input - last ${nrg.toFixed(1)} / ${props.battCap.toFixed(1) || "??"
-              } Wh (est. cap.)`,
-          });
-        } else {
-          // display acceleration, in Wh per hour^2, ie W/h, rounded to aribtrary stdev of 0.5 W/h
-          const roundedAccel = floorVal((accel || 0) * 3600, 0.5);
-          // display acceleration, in % per hour
-          const dispAccel = (val && roundedAccel / val) || 0;
-          let dir = "→";
-          if (dispAccel < -1) dir = "↓";
-          else if (dispAccel < -0.5) dir = "↘";
-          if (dispAccel > 1) dir = "↑";
-          else if (dispAccel > 0.5) dir = "↗";
-          node.status({
-            fill: props.decaying ? "yellow" : "green",
-            shape: "ring",
-            text: `${dir} ${val.toFixed(2)} W - total ${nrg.toFixed(1)} Wh`,
-          });
-        }
-
-        nodeSend([
-          { payload: val, topic: "value" }, // this is rate (Wh / h)
-          {
-            payload: 3600 * accel, // this is accel (Wh / h^2)
-            topic: "rate",
-          },
-          null,
-        ]);
-
-        props.timeout = setTimeout(() => {
-          // in timeout loop => predicts, evaluate cusum, pushResult
-          const nextNow = performance.now();
-          const ts1 = props.filter.predict(nextNow);
-          mainLoop(nextNow, ts1);
-        }, timeout);
+        node.log(
+          `Scheduling one time OFF, ${val.toFixed(
+            1
+          )} / ${props.maxPwr.toFixed(1)} W, k=${(k * 3600).toFixed(2)}`
+        );
+        props.finishing = true;
+        // wrap in timeout to avoid simultaneous read / write on some devices (Meross)
+        setTimeout(() => {
+          // props.finishing is reset on reset condition
+          if (props.finishing)
+            nodeSend([
+              null,
+              null,
+              { payload: false }, // OFF payload
+            ]);
+        }, 2000);
+        return;
       };
+
+      const accel = ((now - props.startTime) > 5 * 60e3) ? k * (0 - val) : 0;
+
+      if (val >= 0.05)
+        if (props.before === 0 && !props.finishing) {
+          // init our energy
+          props.energy = 0;
+          props.battCap = 0;
+          props.before = now;
+        } else {
+          const dt = (now - props.before) / 1e3;
+          props.energy += val * chargerEfficiency * dt;
+          props.before = now;
+        }
+
+      /** in Wh */
+      const nrg = props.energy / 3600;
+
+      if (val < 0.05) {
+        node.status({
+          fill: "red",
+          shape: "ring",
+          text: `No input - last ${nrg.toFixed(1)} / ${props.battCap.toFixed(1) || "??"
+            } Wh (est. cap.)`,
+        });
+      } else {
+        // display acceleration, in Wh per hour^2, ie W/h, rounded to aribtrary stdev of 0.5 W/h
+        const roundedAccel = floorVal((accel || 0) * 3600, 0.5);
+        // display acceleration, in % per hour
+        const dispAccel = (val && roundedAccel / val) || 0;
+        let dir = "→";
+        if (dispAccel < -1) dir = "↓";
+        else if (dispAccel < -0.5) dir = "↘";
+        if (dispAccel > 1) dir = "↑";
+        else if (dispAccel > 0.5) dir = "↗";
+        node.status({
+          fill: props.decaying ? "yellow" : "green",
+          shape: "ring",
+          text: `${dir} ${val.toFixed(2)} W - total ${nrg.toFixed(1)} Wh`,
+        });
+      }
+
+      nodeSend([
+        { payload: val, topic: "value" }, // this is rate (Wh / h)
+        {
+          payload: 3600 * accel, // this is accel (Wh / h^2)
+          topic: "rate",
+        },
+        null,
+      ]);
+
+      props.timeout = setTimeout(() => {
+        // in timeout loop => predicts, evaluate cusum, pushResult
+        const nextNow = performance.now();
+        const ts1 = props.filter.predict(nextNow);
+        mainLoop(nextNow, ts1, timeout, nodeSend);
+      }, timeout);
+    };
+
+    node.on("input", (msg, send, done) => {
+      const pv = Number(msg.payload);
+
+      // Node-RED 0.x compat - https://nodered.org/docs/creating-nodes/node-js#sending-messages
+      const nodeSend =
+        send ||
+        function () {
+          node.send.apply(node, arguments);
+        };
 
       if (pv !== null && !isNaN(pv) && isFinite(pv)) {
         // in value => predicts, check for reset (filter, cusum, not energy?), or correct, evaluate cusum, pushResult
-
         const now = performance.now();
 
         /** timestep */
@@ -246,7 +244,7 @@ const nodeInit = (RED) => {
         } else {
           props.filter.correct(pv, ts);
         }
-        mainLoop(now, ts, 5500);
+        mainLoop(now, ts, 5500, nodeSend);
       } else {
         node.status({ fill: "red", shape: "dot", text: "Bad input value" });
       }
