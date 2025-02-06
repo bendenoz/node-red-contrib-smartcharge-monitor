@@ -4,7 +4,7 @@ const { KalmanFilter } = require("./kalman-filter");
 
 /** @typedef {import("node-red").NodeMessage} NodeMessage */
 
-const stdK = 1e-6; // 0.8e-6 maybe
+const stdK = 0.7e-6;
 
 /** cusum mini k value (in hours^-1) */
 const w = 1 / 6.66;
@@ -79,12 +79,16 @@ const nodeInit = (RED) => {
       const [val, k] = props.filter.mean();
       if (val === null || k === null) return;
 
+      const isSettled = (now - props.startTime) > 5 * 60e3; // min 5 minutes
+
       /**
        * Integrate over k, the inverse of the decay time constant
        * Assuming k ~ 1/1h, it gives us a value in normalized "time" (RC = 1h, 50% = 0.7h, 95% = 3h)
        * Returns true if we are full
        */
       const evalCusum = () => {
+        if (!isSettled) return false;
+
         const thr = (maxCharge - peakCharge) / (100 - peakCharge);
         const maxCusum = -Math.log(1 - thr)
 
@@ -100,22 +104,20 @@ const nodeInit = (RED) => {
         // save max power for later
         if (props.cusum === 0) props.maxPwr = val;
 
-        if (props.filter.state) {
-          if (props.cusum >= w / 60 && prevCusum < w / 60) {
-            // threshold up
-            props.decaying = true;
-          } else if (props.cusum <= w / 60 && prevCusum > w / 60) {
-            // threshold down
-            props.decaying = false;
-          }
+        if (props.cusum > 0 && prevCusum === 0 && props.filter.state) {
+          // nudge covariance when we start detecting change
+          props.filter.state.covariance[1][1] *= 100;
         }
 
-        if (
-          props.decaying &&
-          !props.finishing &&
-          (now - props.startTime) > 5 * 60e3 && // min 5 minutes
-          props.cusum > maxCusum
-        ) {
+        if (props.cusum >= w / 60 && prevCusum < w / 60) {
+          // threshold up
+          props.decaying = true;
+        } else if (props.cusum <= w / 60 && prevCusum > w / 60) {
+          // threshold down
+          props.decaying = false;
+        }
+
+        if (props.cusum > maxCusum && !props.finishing) {
           return true;
         }
         return false;
@@ -148,7 +150,7 @@ const nodeInit = (RED) => {
         return;
       };
 
-      const accel = ((now - props.startTime) > 5 * 60e3) ? k * (0 - val) : 0;
+      const accel = isSettled ? k * (0 - val) : 0;
 
       if (val >= 0.05)
         if (props.before === 0 && !props.finishing) {
