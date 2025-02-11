@@ -25,7 +25,7 @@ class KalmanFilter {
   lastT;
 
   /**
-   * k noise (per second)
+   * k noise (in units per second, not units^2)
    * @type {number}
    */
   kStdev;
@@ -72,12 +72,12 @@ class KalmanFilter {
             timestep,
           }) => {
             const target = 0;
-            const kNoise = this.kStdev * timestep;
+            const kNoise = this.kStdev;
             const rateNoise = (target - pwr) * kNoise;
-            const pwrNoise = rateNoise * timestep;
+            const pwrNoise = rateNoise * 1; // for 1 second
             return [
-              [pwrNoise ** 2, 0],
-              [0, kNoise ** 2],
+              [pwrNoise ** 2 * timestep, 0],
+              [0, kNoise ** 2 * timestep],
             ];
           },
         },

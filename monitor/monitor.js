@@ -10,7 +10,7 @@ const stdK = 0.5e-7;
 const w = 1 / 6.66;
 
 /** Default charge at peak power - see [battery university](https://batteryuniversity.com/article/bu-409-charging-lithium-ion) article */
-const peakCharge = 81.5;
+const peakCharge = 80.5;
 
 /** Charger efficiency */
 const chargerEfficiency = 0.67;
