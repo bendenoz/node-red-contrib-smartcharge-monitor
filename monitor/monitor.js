@@ -4,7 +4,7 @@ const { KalmanFilter, pwrStdev } = require("./kalman-filter");
 
 /** @typedef {import("node-red").NodeMessage} NodeMessage */
 
-const stdK = 0.5e-7;
+const stdK = 0.8e-7;
 
 /** cusum mini k value (in hours^-1) */
 const w = 1 / 6.66;
@@ -217,6 +217,7 @@ const nodeInit = (RED) => {
         const [prevVal] = props.filter.mean();
 
         // check for reset condition
+        // TODO: just detect for ON condition, otherwise use error detection (no need to resetState?)
         if (
           prevVal === null ||
           (prevVal + pv && !(prevVal * pv)) || // start or stop

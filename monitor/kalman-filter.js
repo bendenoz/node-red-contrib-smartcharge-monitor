@@ -55,7 +55,7 @@ class KalmanFilter {
           init: {
             mean: [[initValue], [0]],
             // Initial P
-            covariance: [0.8 ** 2, 1e-7],
+            covariance: [0.8 ** 2, 1e-5],
             index: -1,
           },
           transition: ({ previousCorrected, timestep }) => {
@@ -74,7 +74,7 @@ class KalmanFilter {
             const target = 0;
             const kNoise = this.kStdev;
             const rateNoise = (target - pwr) * kNoise;
-            const pwrNoise = rateNoise * 1; // for 1 second
+            const pwrNoise = rateNoise * timestep;
             return [
               [pwrNoise ** 2 * timestep, 0],
               [0, kNoise ** 2 * timestep],
@@ -100,7 +100,7 @@ class KalmanFilter {
     this.resetCovariance();
     this.state.index = -1;
     this.state.mean[0] = [initValue]; // reset init value
-    this.state.mean[1] = [0]; // also reset k to 0 (?)
+    // this.state.mean[1] = [0]; // also reset k to 0 (?)
   }
 
   // Add a new data point
