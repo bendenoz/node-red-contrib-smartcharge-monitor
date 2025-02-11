@@ -1,10 +1,10 @@
 const { performance } = require("perf_hooks"); // not needed for node > ??
 
-const { KalmanFilter } = require("./kalman-filter");
+const { KalmanFilter, pwrStdev } = require("./kalman-filter");
 
 /** @typedef {import("node-red").NodeMessage} NodeMessage */
 
-const stdK = 0.7e-6;
+const stdK = 0.5e-7;
 
 /** cusum mini k value (in hours^-1) */
 const w = 1 / 6.66;
@@ -14,12 +14,6 @@ const peakCharge = 81.5;
 
 /** Charger efficiency */
 const chargerEfficiency = 0.67;
-
-/** noise distribution around 1.5 cusum minutes */
-const distrib = (x, mean = 1.5, sigma = 0.3) => {
-  var exponent = -((x - mean) ** 2) / (2 * sigma ** 2);
-  return Math.exp(exponent);
-};
 
 /**
  * Round to nearest stdev below
@@ -68,7 +62,7 @@ const nodeInit = (RED) => {
     const mainLoop = (
       /** @type {number} */ now,
       /** @type {number} */ timestep,
-      /** @type {number} */ timeout = 5000,
+      /** @type {number} */ timeout = 5500,
       /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend,
     ) => {
       if (props.timeout) {
@@ -103,11 +97,6 @@ const nodeInit = (RED) => {
 
         // save max power for later
         if (props.cusum === 0) props.maxPwr = val;
-
-        if (props.cusum > 0 && prevCusum === 0 && props.filter.state) {
-          // nudge covariance when we start detecting change
-          props.filter.state.covariance[1][1] *= 100;
-        }
 
         if (props.cusum >= w / 60 && prevCusum < w / 60) {
           // threshold up
@@ -235,7 +224,7 @@ const nodeInit = (RED) => {
         ) {
           // reset
           node.log("Resetting filters");
-          props.filter.resetCovariance(pv);
+          props.filter.resetState(pv);
           props.decaying = false;
           props.finishing = false;
           props.startTime = now;
@@ -244,8 +233,15 @@ const nodeInit = (RED) => {
             props.cusum = 0;
           }
         } else {
-          props.filter.correct(pv, ts);
+          // check for covariance reset condition (detect model error)
+          const error = Math.abs(pv - prevVal);
+          const noise = props.filter.state?.covariance[0][0] ** .5 + pwrStdev;
+          if (error > 3 * noise) { // TODO cusum with 2 * noise ?
+            props.filter.resetCovariance();
+          }
         }
+
+        props.filter.correct(pv, ts);
         mainLoop(now, ts, 5500, nodeSend);
       } else {
         node.status({ fill: "red", shape: "dot", text: "Bad input value" });

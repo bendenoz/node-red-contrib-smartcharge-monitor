@@ -6,6 +6,8 @@ const { performance } = require("perf_hooks"); // not needed for node > ??
 
 require("kalman-filter"); // must be required to init default models
 
+const pwrStdev = 0.08; // measured 0.05 - 0.07 - TODO: Make adjustable
+
 class KalmanFilter {
   /** @type {KalmanClass | undefined} */
   kf;
@@ -29,12 +31,6 @@ class KalmanFilter {
   kStdev;
 
   /**
-   * power noise factor
-   * @type {number}
-   */
-  pwrStdevFactor = 200;
-
-  /**
    * @param {number} kStdev process std dev
    */
   constructor(kStdev) {
@@ -51,7 +47,7 @@ class KalmanFilter {
         observation: {
           dimension: 1,
           // R
-          covariance: [[0.015 ** 2]], // TODO: Make adjustable
+          covariance: [[pwrStdev ** 2]],
         },
         dynamic: {
           // name: "exponential decay",
@@ -59,7 +55,7 @@ class KalmanFilter {
           init: {
             mean: [[initValue], [0]],
             // Initial P
-            covariance: [1e-1, 1e-6],
+            covariance: [0.8 ** 2, 1e-7],
             index: -1,
           },
           transition: ({ previousCorrected, timestep }) => {
@@ -76,9 +72,9 @@ class KalmanFilter {
             timestep,
           }) => {
             const target = 0;
-            const rateNoise = (target - pwr) * timestep * this.kStdev;
-            const pwrNoise = this.pwrStdevFactor * rateNoise;
             const kNoise = this.kStdev * timestep;
+            const rateNoise = (target - pwr) * kNoise;
+            const pwrNoise = rateNoise * timestep;
             return [
               [pwrNoise ** 2, 0],
               [0, kNoise ** 2],
@@ -93,14 +89,18 @@ class KalmanFilter {
     this.lastTS = initTs;
   }
 
-  /** @param {number} initValue */
-  resetCovariance(initValue) {
+  resetCovariance() {
     if (!this.state || !this.kf) return;
-    // reset P0 to speed-up recovery
     this.state.covariance = this.kf.getInitState().covariance;
+  }
+
+  /** @param {number} initValue */
+  resetState(initValue) {
+    if (!this.state || !this.kf) return;
+    this.resetCovariance();
     this.state.index = -1;
     this.state.mean[0] = [initValue]; // reset init value
-    this.state.mean[1] = [0]; // also reset k to 0
+    this.state.mean[1] = [0]; // also reset k to 0 (?)
   }
 
   // Add a new data point
@@ -175,5 +175,6 @@ class KalmanFilter {
 }
 
 module.exports = {
+  pwrStdev,
   KalmanFilter,
 };
