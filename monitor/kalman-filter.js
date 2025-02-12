@@ -25,7 +25,7 @@ class KalmanFilter {
   lastTS;
 
   /**
-   * k noise (in units per second, not units^2)
+   * k noise - in units per second per square-rooted second (not units^2)
    * @type {number}
    */
   kStdev;
@@ -72,12 +72,13 @@ class KalmanFilter {
             timestep,
           }) => {
             const target = 0;
-            const kNoise = this.kStdev;
+            const kNoise = this.kStdev * timestep ** .5;
             const rateNoise = (target - pwr) * kNoise;
             const pwrNoise = rateNoise * timestep;
+            const correl = 1; // assume full correlation, actually no real effect...
             return [
-              [pwrNoise ** 2 * timestep, 0],
-              [0, kNoise ** 2 * timestep],
+              [pwrNoise ** 2, correl * pwrNoise * kNoise],
+              [correl * pwrNoise * kNoise, kNoise ** 2],
             ];
           },
         },
