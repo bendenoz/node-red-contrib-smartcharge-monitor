@@ -55,7 +55,7 @@ class KalmanFilter {
           init: {
             mean: [[initValue], [0]],
             // Initial P
-            covariance: [100 ** 2, 2e3 ** 2],
+            covariance: [100 ** 2, 1e3 ** 2],
             index: -1,
           },
           transition: ({ previousCorrected, timestep }) => {

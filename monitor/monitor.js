@@ -135,6 +135,7 @@ const nodeInit = (RED) => {
               { payload: false }, // OFF payload
             ]);
             props.finishing = false;
+            props.cusum = 0;
           }
         }, 2000);
         return;
