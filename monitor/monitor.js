@@ -106,7 +106,7 @@ const nodeInit = (RED) => {
           props.decaying = false;
         }
 
-        if (props.cusum > maxCusum && !props.finishing) {
+        if (props.cusum > maxCusum) {
           return true;
         }
         return false;
@@ -128,13 +128,14 @@ const nodeInit = (RED) => {
         props.finishing = true;
         // wrap in timeout to avoid simultaneous read / write on some devices (Meross)
         setTimeout(() => {
-          // props.finishing is reset on reset condition
-          if (props.finishing)
+          if (props.finishing) {
             nodeSend([
               null,
               null,
               { payload: false }, // OFF payload
             ]);
+            props.finishing = false;
+          }
         }, 2000);
         return;
       };
@@ -142,7 +143,7 @@ const nodeInit = (RED) => {
       const accel = isSettled ? k * (0 - val) : 0;
 
       if (val >= 0.05)
-        if (props.before === 0 && !props.finishing) {
+        if (props.before === 0) {
           // init our energy
           props.energy = 0;
           props.battCap = 0;
@@ -199,6 +200,7 @@ const nodeInit = (RED) => {
 
     node.on("input", (msg, send, done) => {
       const pv = Number(msg.payload);
+      if (props.finishing) return;
 
       // Node-RED 0.x compat - https://nodered.org/docs/creating-nodes/node-js#sending-messages
       const nodeSend =
@@ -228,13 +230,12 @@ const nodeInit = (RED) => {
           // reset
           node.log("Resetting filter covariance");
           props.filter.resetCovariance();
-          props.decaying = false;
-          props.finishing = false;
           if (prevVal === 0 && pv) {
             // start
             props.before = 0;
             props.cusum = 0;
             props.startTime = now;
+            props.decaying = false;
           }
         }
 
