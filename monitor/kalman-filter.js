@@ -22,7 +22,7 @@ class KalmanFilter {
    * previous timestamp, in milliseconds
    * @type {number}
    */
-  lastT;
+  lastTS;
 
   /**
    * k noise (in units per second, not units^2)
@@ -55,7 +55,7 @@ class KalmanFilter {
           init: {
             mean: [[initValue], [0]],
             // Initial P
-            covariance: [0.8 ** 2, 1e-5],
+            covariance: [100 ** 2, 2e3 ** 2],
             index: -1,
           },
           transition: ({ previousCorrected, timestep }) => {

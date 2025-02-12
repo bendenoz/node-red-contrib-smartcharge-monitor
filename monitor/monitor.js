@@ -216,29 +216,25 @@ const nodeInit = (RED) => {
 
         const [prevVal] = props.filter.mean();
 
-        // check for reset condition
-        // TODO: just detect for ON condition, otherwise use error detection (no need to resetState?)
+        // check for reset conditions
+        const error = prevVal === null ? 0 : Math.abs(pv - prevVal);
+        const noise = props.filter.state?.covariance[0][0] ** .5 + pwrStdev;
         if (
           prevVal === null ||
           (prevVal + pv && !(prevVal * pv)) || // start or stop
-          Math.abs((pv - prevVal) / pv) > 0.1 // 10% step triggers a reset
+          error / pv > 0.1 || // 10% step triggers a reset
+          error > 2.5 * noise
         ) {
           // reset
-          node.log("Resetting filters");
-          props.filter.resetState(pv);
+          node.log("Resetting filter covariance");
+          props.filter.resetCovariance();
           props.decaying = false;
           props.finishing = false;
-          props.startTime = now;
           if (prevVal === 0 && pv) {
+            // start
             props.before = 0;
             props.cusum = 0;
-          }
-        } else {
-          // check for covariance reset condition (detect model error)
-          const error = Math.abs(pv - prevVal);
-          const noise = props.filter.state?.covariance[0][0] ** .5 + pwrStdev;
-          if (error > 3 * noise) { // TODO cusum with 2 * noise ?
-            props.filter.resetCovariance();
+            props.startTime = now;
           }
         }
 
