@@ -1,0 +1,113 @@
+[
+    {
+        "id": "a04e2e5ecd8fb9e0",
+        "type": "inject",
+        "z": "6f7d7db989e06695",
+        "name": "",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"namespace\":\"Appliance.Control.Electricity\"}",
+                "vt": "json"
+            },
+            {
+                "p": "topic",
+                "v": "",
+                "vt": "str"
+            }
+        ],
+        "repeat": "20",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "{\"namespace\":\"Appliance.Control.Electricity\"}",
+        "payloadType": "json",
+        "x": 830,
+        "y": 640,
+        "wires": [
+            [
+                "45092418.3efefc"
+            ]
+        ]
+    },
+    {
+        "id": "45092418.3efefc",
+        "type": "smartplug-control",
+        "z": "6f7d7db989e06695",
+        "confignode": "9c144f9f.a9231",
+        "name": "",
+        "ip": "ip.add.re.ss",
+        "x": 1010,
+        "y": 640,
+        "wires": [
+            [
+                "2beb1aa837380a0c"
+            ]
+        ]
+    },
+    {
+        "id": "2beb1aa837380a0c",
+        "type": "change",
+        "z": "6f7d7db989e06695",
+        "name": "",
+        "rules": [
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "msg.payload.electricity.power / 1000",
+                "tot": "jsonata"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 1220,
+        "y": 640,
+        "wires": [
+            [
+                "ca18a8efb60991ae"
+            ]
+        ]
+    },
+    {
+        "id": "ca18a8efb60991ae",
+        "type": "smartcharge-monitor",
+        "z": "6f7d7db989e06695",
+        "name": "",
+        "stddev": 0.05,
+        "timestep": 20,
+        "cutoff": "83",
+        "x": 1460,
+        "y": 640,
+        "wires": [
+            [],
+            [],
+            [
+                "2d0553d01cda0235"
+            ]
+        ]
+    },
+    {
+        "id": "2d0553d01cda0235",
+        "type": "smartplug-control",
+        "z": "6f7d7db989e06695",
+        "confignode": "9c144f9f.a9231",
+        "name": "",
+        "ip": "ip.add.re.ss",
+        "x": 1690,
+        "y": 640,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "9c144f9f.a9231",
+        "type": "meross-config",
+        "name": "Meross",
+        "key": "<yourapikey>"
+    }
+]
