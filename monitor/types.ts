@@ -1,7 +1,8 @@
 import { KalmanFilter } from "./kalman-filter";
 
 export type Props = {
-  filter: KalmanFilter;
+  kfSlow: KalmanFilter;
+  kfFast: KalmanFilter;
   /** last timestamp */
   before: number;
   /** Normalized time, in minutes, for a k of 1 h^1 */

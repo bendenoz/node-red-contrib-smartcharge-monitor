@@ -41,7 +41,8 @@ const nodeInit = (RED) => {
     const initProps = () => {
       /** @type {import("./types").Props} */
       const p = {
-        filter: new KalmanFilter(stdK), // our actual filter
+        kfSlow: new KalmanFilter(stdK), // display filter
+        kfFast: new KalmanFilter(400 * stdK), // cusum (detection) filter
         before: 0,
         cusum: 0,
         decaying: props ? props.decaying : false,
@@ -52,7 +53,8 @@ const nodeInit = (RED) => {
         finishing: false,
         startTime: 0,
       };
-      p.filter.init(0);
+      p.kfSlow.init(0);
+      p.kfFast.init(0);
       return p;
     };
 
@@ -61,7 +63,7 @@ const nodeInit = (RED) => {
 
     const mainLoop = (
       /** @type {number} */ now,
-      /** @type {number} */ timestep,
+      /** @type {number} use by cusum */ timestep,
       /** @type {number} */ timeout = 5500,
       /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend,
     ) => {
@@ -70,8 +72,11 @@ const nodeInit = (RED) => {
         props.timeout = null;
       }
 
-      const [val, k] = props.filter.mean();
+      const [val, k] = props.kfSlow.mean();
       if (val === null || k === null) return;
+
+      const [, kFast] = props.kfFast.mean();
+      if (kFast === null) return;
 
       const isSettled = (now - props.startTime) > 5 * 60e3; // min 5 minutes
 
@@ -83,11 +88,11 @@ const nodeInit = (RED) => {
       const evalCusum = () => {
         if (!isSettled) return false;
 
-        const thr = (maxCharge - peakCharge) / (100 - peakCharge);
+        const thr = (maxCharge - peakCharge) / ((100 + 2) - peakCharge); // 2 to compensate for actual end of charge @90% of saturation (TBC)
         const maxCusum = -Math.log(1 - thr)
 
         /** k in hour^-1 */
-        const kH = k * 3600;
+        const kH = kFast * 3600;
 
         const prevCusum = props.cusum;
         /** dimensionless */
@@ -136,6 +141,8 @@ const nodeInit = (RED) => {
             ]);
             props.finishing = false;
             props.cusum = 0;
+            // more like props = initProps(); ?
+            // + keep looping anyway?
           }
         }, 2000);
         return;
@@ -194,8 +201,10 @@ const nodeInit = (RED) => {
       props.timeout = setTimeout(() => {
         // in timeout loop => predicts, evaluate cusum, pushResult
         const nextNow = performance.now();
-        const ts1 = props.filter.predict(nextNow);
-        mainLoop(nextNow, ts1, timeout, nodeSend);
+        const timestep = (nextNow - props.kfSlow.stateTS) / 1000;
+        props.kfSlow.predict(nextNow);
+        props.kfFast.predict(nextNow);
+        mainLoop(nextNow, timestep, timeout, nodeSend);
       }, timeout);
     };
 
@@ -215,33 +224,46 @@ const nodeInit = (RED) => {
         const now = performance.now();
 
         /** timestep */
-        const ts = props.filter.predict(now);
+        const timestep = (now - props.kfSlow.stateTS) / 1000;
+        props.kfSlow.predict(now);
+        props.kfFast.predict(now);
 
-        const [prevVal] = props.filter.mean();
+        const [prevVal] = props.kfSlow.mean();
+        const [, kFast] = props.kfFast.mean();
 
         // check for reset conditions
         const error = prevVal === null ? 0 : Math.abs(pv - prevVal);
-        const noise = props.filter.state?.covariance[0][0] ** .5 + pwrStdev;
+        const noise = props.kfSlow.state?.covariance[0][0] ** .5 + pwrStdev;
         if (
           prevVal === null ||
           (prevVal + pv && !(prevVal * pv)) || // start or stop
-          error / pv > 0.1 || // 10% step triggers a reset
+          // error / pv > 0.1 || // 10% step triggers a reset
           error > 2.5 * noise
         ) {
           // reset
-          node.log("Resetting filter covariance");
-          props.filter.resetCovariance();
-          if (prevVal === 0 && pv) {
-            // start
-            props.before = 0;
-            props.cusum = 0;
-            props.startTime = now;
-            props.decaying = false;
+          node.log("Moving fast to slow");
+          props.kfSlow.state = props.kfFast.state;
+          // check for reset
+          if (kFast !== null && (kFast < 0 || kFast > 0.0001)) {
+            node.log("Resetting filter covariance");
+            props.kfSlow.resetCovariance();
+            if (props.kfSlow.state && (kFast < 0 || kFast > 0.001)) {
+              // and also reset k to 0 for negative or very high values
+              props.kfSlow.state.mean[1][0] = 0;
+            }
+            if (prevVal === 0 && pv) {
+              // start
+              props.before = 0;
+              props.cusum = 0;
+              props.startTime = now;
+              props.decaying = false;
+            }
           }
         }
 
-        props.filter.correct(pv, ts);
-        mainLoop(now, ts, 5500, nodeSend);
+        props.kfSlow.correct(pv, now);
+        props.kfFast.correct(pv, now);
+        mainLoop(now, timestep, 5500, nodeSend);
       } else {
         node.status({ fill: "red", shape: "dot", text: "Bad input value" });
       }

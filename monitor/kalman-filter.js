@@ -15,14 +15,24 @@ class KalmanFilter {
   /** @type {StateType | null} */
   state = null;
 
+  /** @type {StateType | null} */
+  previousCorrected = null;
+
   /** @type {[number, number]} */
   K = [0, 0];
 
   /**
+* previous timestamp, in milliseconds
+* @type {number}
+*/
+  stateTS;
+  /**
    * previous timestamp, in milliseconds
    * @type {number}
    */
-  lastTS;
+  correctTS;
+
+
 
   /**
    * k noise - in units per second per square-rooted second (not units^2)
@@ -75,7 +85,7 @@ class KalmanFilter {
             const kNoise = this.kStdev * timestep ** .5;
             const rateNoise = (target - pwr) * kNoise;
             const pwrNoise = rateNoise * timestep;
-            const correl = 1; // assume full correlation, actually no real effect...
+            const correl = 1; // assume full correlation
             return [
               [pwrNoise ** 2, correl * pwrNoise * kNoise],
               [correl * pwrNoise * kNoise, kNoise ** 2],
@@ -87,7 +97,10 @@ class KalmanFilter {
       console.error(e);
       throw e;
     }
-    this.lastTS = initTs;
+    this.state = this.kf.getInitState();
+    this.stateTS = initTs;
+    this.previousCorrected = this.state;
+    this.correctTS = initTs;
   }
 
   resetCovariance() {
@@ -95,59 +108,32 @@ class KalmanFilter {
     this.state.covariance = this.kf.getInitState().covariance;
   }
 
-  /** @param {number} initValue */
-  resetState(initValue) {
-    if (!this.state || !this.kf) return;
-    this.resetCovariance();
-    this.state.index = -1;
-    this.state.mean[0] = [initValue]; // reset init value
-    // this.state.mean[1] = [0]; // also reset k to 0 (?)
-  }
-
-  // Add a new data point
-  /** @param {number} value */
-  push(value, ts = performance.now()) {
-    if (!this.kf) {
-      this.init(value, ts);
-      return;
-    }
-    if (!this.kf) throw new Error("No KF instance");
-
-    const timestep = this.predict(ts);
-
-    this.K = /** @type {[number, number]} */ (
-      this.kf.getGain({ predicted: this.state }).map(([v]) => v)
-    );
-
-    this.correct(value, timestep);
-  }
-
   /** Returns timestep in seconds, used by correct */
   predict(ts = performance.now()) {
-    if (!this.kf || !this.lastTS) throw new Error("No KF instance");
-    const timestep = (ts - this.lastTS) / 1000;
+    if (!this.kf || !this.correctTS) throw new Error("No KF instance");
+    const timestep = (ts - this.correctTS) / 1000;
     const predicted = this.kf.predict({
       previousCorrected: this.state,
       timestep,
     });
     this.state = predicted;
-    this.lastTS = ts;
-    return timestep;
+    this.stateTS = ts;
   }
 
   /**
    * @param {number} value
-   * @param {number} timestep
+   * @param {number} ts
    */
-  correct(value, timestep) {
+  correct(value, ts) {
     if (!this.kf) throw new Error("No KF instance");
     const corrected = this.kf.correct({
       predicted: this.state,
       observation: [value],
-      timestep,
     });
-
+    this.previousCorrected = corrected;
+    this.correctTS = ts;
     this.state = corrected;
+    this.stateTS = ts;
   }
 
   /** @return {[number | null, number | null]} */
