@@ -1,10 +1,9 @@
-const { performance } = require("perf_hooks"); // not needed for node > ??
-
 const { KalmanFilter, pwrStdev } = require("./kalman-filter");
+const { State } = require("kalman-filter");
 
 /** @typedef {import("node-red").NodeMessage} NodeMessage */
 
-const stdK = 0.8e-7;
+const stdK = 0.77e-7;
 
 /** cusum mini k value (in hours^-1) */
 const w = 1 / 6.66;
@@ -14,13 +13,6 @@ const peakCharge = 80.5;
 
 /** Charger efficiency */
 const chargerEfficiency = 0.67;
-
-/**
- * Round to nearest stdev below
- * @param {number} v
- */
-const floorVal = (v, stdev = 0.5) =>
-  Math.sign(v) * Math.floor(Math.abs(v) / stdev) * stdev;
 
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
@@ -38,14 +30,14 @@ const nodeInit = (RED) => {
     /** @type {import("./types").Props} */
     let props;
 
-    const initProps = () => {
+    const initProps = (/** @type {number} */ now) => {
       /** @type {import("./types").Props} */
       const p = {
         kfSlow: new KalmanFilter(stdK), // display filter
         kfFast: new KalmanFilter(400 * stdK), // cusum (detection) filter
-        before: 0,
+        lastPush: 0,
         cusum: 0,
-        decaying: props ? props.decaying : false,
+        triggerCusum: 0,
         energy: props ? props.energy : 0,
         battCap: props ? props.battCap : 0,
         maxPwr: props ? props.maxPwr : 0,
@@ -53,87 +45,55 @@ const nodeInit = (RED) => {
         finishing: false,
         startTime: 0,
       };
-      p.kfSlow.init(0);
-      p.kfFast.init(0);
+      p.kfSlow.init(0, now);
+      p.kfFast.init(0, now);
       return p;
     };
 
-    props = initProps();
+    props = initProps(Date.now());
     node.log("Props initialized");
 
-    const mainLoop = (
-      /** @type {number} */ now,
-      /** @type {number} use by cusum */ timestep,
-      /** @type {number} */ timeout = 5500,
-      /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend,
-    ) => {
-      if (props.timeout) {
-        clearTimeout(props.timeout);
-        props.timeout = null;
-      }
+    const evalCusum = (/** @type {number} */ timestep) => {
+      const [, kSlow] = props.kfSlow.mean();
+      const [, kFast] = props.kfFast.mean();
+      if (kFast === null || kSlow === null) return;
 
+      /** k in hour^-1 */
+      const kH = kFast * 3600;
+
+      const inc = (kH - kSlow * 3600 - w) * (timestep / 60);
+      props.cusum = Math.max(0, props.cusum + inc);
+      if (inc > 0) props.cusum += w * (timestep / 60);
+
+      const triggerInc = (kH - w) * (timestep / 60);
+      props.triggerCusum = Math.max(0, props.triggerCusum + triggerInc);
+      if (triggerInc > 0) props.triggerCusum += w * (timestep / 60);
+      else props.triggerCusum = 0;
+    };
+
+    const evalTrigger = (
+      /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend
+    ) => {
+      const threshold = (100 + 5 - maxCharge) / (100 + 5 - peakCharge); // 5 to compensate for actual end of charge @90% of saturation (TBC)
       const [val, k] = props.kfSlow.mean();
       if (val === null || k === null) return;
 
-      const [, kFast] = props.kfFast.mean();
-      if (kFast === null) return;
-
-      const isSettled = (now - props.startTime) > 5 * 60e3; // min 5 minutes
-
-      /**
-       * Integrate over k, the inverse of the decay time constant
-       * Assuming k ~ 1/1h, it gives us a value in normalized "time" (RC = 1h, 50% = 0.7h, 95% = 3h)
-       * Returns true if we are full
-       */
-      const evalCusum = () => {
-        if (!isSettled) return false;
-
-        const thr = (maxCharge - peakCharge) / ((100 + 2) - peakCharge); // 2 to compensate for actual end of charge @90% of saturation (TBC)
-        const maxCusum = -Math.log(1 - thr)
-
-        /** k in hour^-1 */
-        const kH = kFast * 3600;
-
-        const prevCusum = props.cusum;
-        /** dimensionless */
-        const inc = (kH - w) * (timestep / 3600);
-        props.cusum = Math.max(0, props.cusum + inc);
-        if (inc > 0) props.cusum += w * (timestep / 3600); // compensate for threshold in our integral
-
-        // save max power for later
-        if (props.cusum === 0) props.maxPwr = val;
-
-        if (props.cusum >= w / 60 && prevCusum < w / 60) {
-          // threshold up
-          props.decaying = true;
-        } else if (props.cusum <= w / 60 && prevCusum > w / 60) {
-          // threshold down
-          props.decaying = false;
-        }
-
-        if (props.cusum > maxCusum) {
-          return true;
-        }
-        return false;
-      };
-
-      const fullCharge = evalCusum();
-      if (fullCharge) {
-        if (props.battCap === 0 && props.cusum >= 10) {
-          // try to estimate battery capacity from max value and decay constant
-          props.battCap =
-            (props.maxPwr * chargerEfficiency) /
-            ((100 - peakCharge) / 100);
-        }
+      if (
+        props.triggerCusum > 2 &&
+        props.maxPwr &&
+        val <= props.maxPwr * threshold
+      ) {
+        node.log("Triggered");
         node.log(
-          `Scheduling one time OFF, ${val.toFixed(
+          `Scheduling one time OFF, ${val.toFixed(1)} / ${props.maxPwr.toFixed(
             1
-          )} / ${props.maxPwr.toFixed(1)} W, k=${(k * 3600).toFixed(2)}`
+          )} W, k=${(k * 3600).toFixed(2)}`
         );
         props.finishing = true;
         // wrap in timeout to avoid simultaneous read / write on some devices (Meross)
         setTimeout(() => {
           if (props.finishing) {
+            node.log("Sending OFF");
             nodeSend([
               null,
               null,
@@ -141,49 +101,53 @@ const nodeInit = (RED) => {
             ]);
             props.finishing = false;
             props.cusum = 0;
+            props.triggerCusum = 0;
             // more like props = initProps(); ?
             // + keep looping anyway?
           }
         }, 2000);
-        return;
-      };
+        return true;
+      }
+      return false;
+    };
 
-      const accel = isSettled ? k * (0 - val) : 0;
+    const pushOut = (
+      /** @type {number} */ now,
+      /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend
+    ) => {
+      const [val, k] = props.kfSlow.mean();
+      const [, kFast] = props.kfFast.mean();
+      if (val === null || k === null || kFast === null) return;
 
-      if (val >= 0.05)
-        if (props.before === 0) {
-          // init our energy
-          props.energy = 0;
-          props.battCap = 0;
-          props.before = now;
-        } else {
-          const dt = (now - props.before) / 1e3;
-          props.energy += val * chargerEfficiency * dt;
-          props.before = now;
-        }
+      const dt = (now - props.lastPush) / 1e3;
+      props.energy += val * chargerEfficiency * dt;
+      props.lastPush = now;
 
       /** in Wh */
       const nrg = props.energy / 3600;
+
+      const isSettled = now - props.startTime > 1 * 60e3; // min 1 minutes
+      const accel = isSettled ? k * 3600 * (0 - val) : null; // (Wh / h^2)
+
+      const hasDecay = kFast * 3600 > w;
+      // save for later
+      if (!hasDecay) props.maxPwr = val;
 
       if (val < 0.05) {
         node.status({
           fill: "red",
           shape: "ring",
-          text: `No input - last ${nrg.toFixed(1)} / ${props.battCap.toFixed(1) || "??"
-            } Wh (est. cap.)`,
+          text: `No input - last ${nrg.toFixed(1)}  Wh`,
         });
       } else {
-        // display acceleration, in Wh per hour^2, ie W/h, rounded to aribtrary stdev of 0.5 W/h
-        const roundedAccel = floorVal((accel || 0) * 3600, 0.5);
-        // display acceleration, in % per hour
-        const dispAccel = (val && roundedAccel / val) || 0;
+        const dispAccel = -k * 3600 || 0;
         let dir = "→";
         if (dispAccel < -1) dir = "↓";
         else if (dispAccel < -0.5) dir = "↘";
         if (dispAccel > 1) dir = "↑";
         else if (dispAccel > 0.5) dir = "↗";
         node.status({
-          fill: props.decaying ? "yellow" : "green",
+          fill: hasDecay ? "yellow" : "green",
           shape: "ring",
           text: `${dir} ${val.toFixed(2)} W - total ${nrg.toFixed(1)} Wh`,
         });
@@ -192,25 +156,39 @@ const nodeInit = (RED) => {
       nodeSend([
         { payload: val, topic: "value" }, // this is rate (Wh / h)
         {
-          payload: 3600 * accel, // this is accel (Wh / h^2)
+          payload: accel, // this is acceleration (Wh / h^2)
           topic: "rate",
         },
         null,
       ]);
+    };
 
+    const scheduleUpdate = (
+      /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend,
+      /** @type {number} */ timeout = 5500
+    ) => {
       props.timeout = setTimeout(() => {
-        // in timeout loop => predicts, evaluate cusum, pushResult
-        const nextNow = performance.now();
-        const timestep = (nextNow - props.kfSlow.stateTS) / 1000;
-        props.kfSlow.predict(nextNow);
-        props.kfFast.predict(nextNow);
-        mainLoop(nextNow, timestep, timeout, nodeSend);
+        const now = Date.now();
+        const timestep = (now - props.kfFast.stateTS) / 1000;
+        props.kfSlow.predict(now, props.cusum > 0.2 ? 30 * props.cusum : 1);
+        props.kfFast.predict(now);
+        pushOut(now, nodeSend);
+        evalCusum(timestep);
+        if (!evalTrigger(nodeSend)) scheduleUpdate(nodeSend);
       }, timeout);
     };
 
     node.on("input", (msg, send, done) => {
       const pv = Number(msg.payload);
-      if (props.finishing) return;
+      if (props.finishing) {
+        done();
+        return;
+      }
+
+      if (props.timeout) {
+        clearTimeout(props.timeout);
+        props.timeout = null;
+      }
 
       // Node-RED 0.x compat - https://nodered.org/docs/creating-nodes/node-js#sending-messages
       const nodeSend =
@@ -221,49 +199,75 @@ const nodeInit = (RED) => {
 
       if (pv !== null && !isNaN(pv) && isFinite(pv)) {
         // in value => predicts, check for reset (filter, cusum, not energy?), or correct, evaluate cusum, pushResult
-        const now = performance.now();
+        const now = Date.now();
 
-        /** timestep */
-        const timestep = (now - props.kfSlow.stateTS) / 1000;
-        props.kfSlow.predict(now);
+        const reInit = () => {
+          props.kfSlow.init(pv, now);
+          props.kfFast.init(pv, now);
+          props.lastPush = 0;
+          props.cusum = 0;
+          props.triggerCusum = 0;
+          props.startTime = now;
+          pushOut(now, nodeSend);
+          if (done) done();
+        };
+
+        /** timestep (before predict !) */
+        const timestep = (now - props.kfFast.stateTS) / 1000;
+        props.kfSlow.predict(now, props.cusum > 0.2 ? 30 * props.cusum : 1);
         props.kfFast.predict(now);
 
         const [prevVal] = props.kfSlow.mean();
-        const [, kFast] = props.kfFast.mean();
 
-        // check for reset conditions
-        const error = prevVal === null ? 0 : Math.abs(pv - prevVal);
-        const noise = props.kfSlow.state?.covariance[0][0] ** .5 + pwrStdev;
-        if (
-          prevVal === null ||
-          (prevVal + pv && !(prevVal * pv)) || // start or stop
-          // error / pv > 0.1 || // 10% step triggers a reset
-          error > 2.5 * noise
-        ) {
-          // reset
-          node.log("Moving fast to slow");
-          props.kfSlow.state = props.kfFast.state;
-          // check for reset
-          if (kFast !== null && (kFast < 0 || kFast > 0.0001)) {
-            node.log("Resetting filter covariance");
-            props.kfSlow.resetCovariance();
-            if (props.kfSlow.state && (kFast < 0 || kFast > 0.001)) {
-              // and also reset k to 0 for negative or very high values
-              props.kfSlow.state.mean[1][0] = 0;
-            }
-            if (prevVal === 0 && pv) {
-              // start
-              props.before = 0;
-              props.cusum = 0;
-              props.startTime = now;
-              props.decaying = false;
-            }
+        // Check for reset conditions
+
+        // first detect start or stop
+        if (prevVal === null || (prevVal + pv && !(prevVal * pv))) {
+          if (pv) {
+            node.log("Start detected");
+            props.energy = 0;
+            props.battCap = 0;
+          } else {
+            node.log("Stop detected");
           }
+          reInit();
+          return;
+        }
+
+        // then detect noise
+        const error = prevVal === null ? 0 : Math.abs(pv - prevVal);
+        const noise = props.kfSlow.state?.covariance[0][0] ** 0.5 + pwrStdev;
+        const noiseReset = error > 2.5 * noise;
+        if (noiseReset) {
+          node.log("Noise reset");
+          props.kfSlow.state =
+            props.kfFast.state && new State(props.kfFast.state);
         }
 
         props.kfSlow.correct(pv, now);
         props.kfFast.correct(pv, now);
-        mainLoop(now, timestep, 5500, nodeSend);
+
+        // finally check for incoherent k values
+        const [, correctedKFast] = props.kfFast.mean();
+        if (correctedKFast !== null) {
+          // reset on time constant less than 10 minutes
+          if (correctedKFast * 60 > 10 ** -1) {
+            node.log("reinit on time constant too high");
+            reInit();
+            return;
+          }
+
+          // reset on time constant less than -20 minutes
+          if (correctedKFast * 60 < -(20 ** -1)) {
+            node.log("reinit on high negative time constant");
+            reInit();
+            return;
+          }
+        }
+
+        pushOut(now, nodeSend);
+        evalCusum(timestep);
+        if (!evalTrigger(nodeSend)) scheduleUpdate(nodeSend); // TODO: evalTrigger should call scheduleUpdate ?
       } else {
         node.status({ fill: "red", shape: "dot", text: "Bad input value" });
       }

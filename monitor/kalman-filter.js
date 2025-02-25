@@ -2,7 +2,6 @@
 
 const KalmanClass = require("kalman-filter/lib/kalman-filter");
 const StateType = require("kalman-filter/lib/state");
-const { performance } = require("perf_hooks"); // not needed for node > ??
 
 require("kalman-filter"); // must be required to init default models
 
@@ -22,17 +21,15 @@ class KalmanFilter {
   K = [0, 0];
 
   /**
-* previous timestamp, in milliseconds
-* @type {number}
-*/
+   * previous timestamp, in milliseconds
+   * @type {number}
+   */
   stateTS;
   /**
    * previous timestamp, in milliseconds
    * @type {number}
    */
   correctTS;
-
-
 
   /**
    * k noise - in units per second per square-rooted second (not units^2)
@@ -50,8 +47,9 @@ class KalmanFilter {
   /**
    * Instanciate kalman filter with value
    * @param {number} initValue
+   * @param {number} initTs
    */
-  init(initValue, initTs = performance.now()) {
+  init(initValue, initTs) {
     try {
       this.kf = new KalmanClass({
         observation: {
@@ -78,12 +76,15 @@ class KalmanFilter {
           },
           // Q (noise)
           covariance: ({
-            previousCorrected: { mean: [[pwr]], },
+            previousCorrected: {
+              mean: [[pwr]],
+            },
             timestep,
+            noiseFactor,
           }) => {
             const target = 0;
-            const kNoise = this.kStdev * timestep ** .5;
-            const rateNoise = (target - pwr) * kNoise;
+            const kNoise = noiseFactor * this.kStdev * timestep ** 0.5;
+            const rateNoise = Math.abs(target - pwr) * kNoise;
             const pwrNoise = rateNoise * timestep;
             const correl = 1; // assume full correlation
             return [
@@ -108,13 +109,18 @@ class KalmanFilter {
     this.state.covariance = this.kf.getInitState().covariance;
   }
 
-  /** Returns timestep in seconds, used by correct */
-  predict(ts = performance.now()) {
+  /**
+   * Predict the next state
+   * @param {number} ts - Timestamp in milliseconds
+   * @param {number} [noiseFactor=1] - Noise factor
+   */
+  predict(ts, noiseFactor = 1) {
     if (!this.kf || !this.correctTS) throw new Error("No KF instance");
     const timestep = (ts - this.correctTS) / 1000;
     const predicted = this.kf.predict({
-      previousCorrected: this.state,
+      previousCorrected: this.previousCorrected,
       timestep,
+      noiseFactor,
     });
     this.state = predicted;
     this.stateTS = ts;
@@ -131,16 +137,14 @@ class KalmanFilter {
       observation: [value],
     });
     this.previousCorrected = corrected;
-    this.correctTS = ts;
+    this.correctTS = ts; // = this.stateTS ? since predict is called first
     this.state = corrected;
     this.stateTS = ts;
   }
 
   /** @return {[number | null, number | null]} */
   mean() {
-    return this.state === null
-      ? [null, null]
-      : this.state.mean.map(([v]) => v);
+    return this.state === null ? [null, null] : this.state.mean.map(([v]) => v);
   }
 
   count() {
