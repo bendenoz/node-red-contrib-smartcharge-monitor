@@ -195,4 +195,54 @@ describe("Monitor Node", () => {
 
     node.closeCallback();
   });
+
+  it("should process applewatch fixture data correctly", () => {
+    const dataPath = path.join(
+      __dirname,
+      "..",
+      "fixtures",
+      "data-apple-watch.csv"
+    );
+    const csvData = fs.readFileSync(dataPath, "utf8");
+    inputData = csvParse(csvData, {
+      columns: true,
+      skip_empty_lines: true,
+      cast: true,
+    });
+
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 83 });
+
+    node.log = jest.fn((...args) => [args, Date.now()]);
+
+    inputData.forEach((data) => {
+      const timestamp = parseFloat(data.timestamp);
+      const value = parseFloat(data.value);
+
+      jest.setSystemTime(new Date(startTime + timestamp));
+
+      const msg = { payload: value };
+      node.inputCallback(msg, send, done);
+
+      jest.advanceTimersByTime(5500);
+      jest.advanceTimersByTime(5500);
+      jest.advanceTimersByTime(5500);
+    });
+
+    expect(send).toHaveBeenCalled();
+    expect(done).toHaveBeenCalled();
+    expect(node.log).toHaveBeenCalled();
+
+    // Output the log calls to the console with system time of the actual call
+    console.log(
+      node.log.mock.results.map((result) => [
+        (result.value[1] - startTime) / 1000,
+        (result.value[1] - startTime) / 1000 / 60,
+        result.value[0],
+      ])
+    );
+
+    node.closeCallback();
+  });
 });
