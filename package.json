@@ -30,7 +30,7 @@
   },
   "license": "MIT",
   "scripts": {
-    "build": "babel monitor -d dist/monitor/",
+    "build": "babel monitor -d dist/monitor/ --ignore **/*.test.js",
     "test": "jest"
   }
 }
