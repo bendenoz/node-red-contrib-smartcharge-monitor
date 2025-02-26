@@ -1,6 +1,7 @@
 node_modules/
-monitor/
+/monitor
 fixtures/
 tests/
+local/
 *.test.js
 *.spec.js
