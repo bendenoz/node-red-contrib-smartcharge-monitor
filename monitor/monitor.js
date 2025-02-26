@@ -35,7 +35,7 @@ const nodeInit = (RED) => {
       const p = {
         kfSlow: new KalmanFilter(stdK), // display filter
         kfFast: new KalmanFilter(400 * stdK), // cusum (detection) filter
-        lastPush: 0,
+        lastPush: now,
         cusum: 0,
         triggerCusum: 0,
         energy: props ? props.energy : 0,
@@ -43,7 +43,7 @@ const nodeInit = (RED) => {
         maxPwr: props ? props.maxPwr : 0,
         timeout: props ? props.timeout : null,
         finishing: false,
-        startTime: 0,
+        startTime: now,
       };
       p.kfSlow.init(0, now);
       p.kfFast.init(0, now);
@@ -204,7 +204,7 @@ const nodeInit = (RED) => {
         const reInit = () => {
           props.kfSlow.init(pv, now);
           props.kfFast.init(pv, now);
-          props.lastPush = 0;
+          props.lastPush = now;
           props.cusum = 0;
           props.triggerCusum = 0;
           props.startTime = now;
@@ -239,7 +239,9 @@ const nodeInit = (RED) => {
         const noise = props.kfSlow.state?.covariance[0][0] ** 0.5 + pwrStdev;
         const noiseReset = error > 2.5 * noise;
         if (noiseReset) {
-          node.log("Noise reset");
+          node.log(
+            `Noise reset: ${error.toFixed(2)}W (${(error / noise).toFixed(1)}σ)`
+          );
           props.kfSlow.state =
             props.kfFast.state && new State(props.kfFast.state);
         }
@@ -252,14 +254,24 @@ const nodeInit = (RED) => {
         if (correctedKFast !== null) {
           // reset on time constant less than 10 minutes
           if (correctedKFast * 60 > 10 ** -1) {
-            node.log("reinit on time constant too high");
+            node.log(
+              `reinit on time constant too high (1 / ${(
+                (correctedKFast * 60) **
+                -1
+              ).toFixed(0)} min^-1)`
+            );
             reInit();
             return;
           }
 
           // reset on time constant less than -20 minutes
           if (correctedKFast * 60 < -(20 ** -1)) {
-            node.log("reinit on high negative time constant");
+            node.log(
+              `reinit on high negative time constant (-1 / ${(
+                (-correctedKFast * 60) **
+                -1
+              ).toFixed(0)} min^-1)`
+            );
             reInit();
             return;
           }
