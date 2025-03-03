@@ -20,7 +20,7 @@
       return this.name || "smartcharge-monitor";
     },
     oneditprepare: function () {
-      $("#smartcharge-toggle-advanced-settings").on("click", function () {
+      $("#btn-smartcharge-toggle-advanced-settings").on("click", function () {
         $("#smartcharge-advanced-settings").toggle();
         if ($("#smartcharge-advanced-settings").is(":visible")) {
           $(this).text("Hide Advanced Settings");
@@ -44,8 +44,8 @@
   <div class="form-row">
     <button
       type="button"
-      id="smartcharge-toggle-advanced-settings"
-      class="red-ui-button"
+      id="btn-smartcharge-toggle-advanced-settings"
+      class="red-ui-button red-ui-button-small editor-button editor-button-small"
     >
       Show Advanced Settings
     </button>
