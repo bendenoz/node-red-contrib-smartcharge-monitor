@@ -1,13 +1,13 @@
 # Node-RED Contrib SmartCharge Monitor
 
 **Node-RED custom node for intelligent monitoring and optimization of battery charging based on power consumption insights.**  
-This node aims to bring **smart charging capabilities** to **non-smart lithium-based battery devices** that typically lack such features, including **electrical bikes, scooters, drones, power tools, vacuum cleaners, wireless mice, gaming controllers, portable speakers, power banks, and more**. While many **phones and laptops** now have built-in battery management systems, this node fills the gap for other devices by detecting the **exponential decay of the saturation stage** in the charging cycle through real-time monitoring of power consumption.
+This node aims to bring **smart charging capabilities** to **non-smart lithium-based battery devices** that typically lack such features, including electrical bikes, scooters, drones, power tools, vacuum cleaners, wireless mice, gaming controllers, portable speakers, power banks, and more. While many phones and laptops now have built-in battery management systems, this node fills the gap for other devices by detecting the **exponential decay of the saturation stage** in the charging cycle through real-time monitoring of power consumption.
 
 The idea is to prevent overcharging, extend battery life, and minimize energy waste.
 
 > For more information on charging cycles, refer to [Battery University](https://batteryuniversity.com/article/bu-409-charging-lithium-ion).
 
-**Requirements:** A connected power plug with power reading capability.
+**Requirements:** A connected power plug with power reading capability.  
 **Tested With:** Primarily tested with the [Meross smart plug](https://flows.nodered.org/node/node-red-contrib-meross) (MSS310 / MSS315), but should be compatible with other smart plugs that support power monitoring.
 
 ## 📦 Installation
@@ -26,13 +26,13 @@ npm install @bendenoz/node-red-smartcharge-monitor
 4. Connect the third output of the node to the OFF command of your connected power plug.
 5. Optionally use the first and second outputs to plot the charging power and rate of change for a detailed view of the charging process.
 
-![Charge Graph](images/graph.png)
+![Charge Graph](https://raw.githubusercontent.com/bendenoz/node-red-contrib-smartcharge-monitor/main/images/graph.png)
 
 ## 📊 Example Flow
 
 Below is an example flow demonstrating how to integrate the smartcharge-monitor node:
 
-![Example Flow](images/example-flow.png)
+![Example Flow](https://raw.githubusercontent.com/bendenoz/node-red-contrib-smartcharge-monitor/main/images/example-flow.png)
 
 ## Configuration
 
