@@ -1,4 +1,4 @@
-# Node-RED Contrib SmartCharge Monitor
+# Node-RED SmartCharge Monitor
 
 **Node-RED custom node for intelligent monitoring and optimization of battery charging based on power consumption insights.**  
 This node aims to bring **smart charging capabilities** to **non-smart lithium-based battery devices** that typically lack such features, including electrical bikes, scooters, drones, power tools, vacuum cleaners, wireless mice, gaming controllers, portable speakers, power banks, and more. While many phones and laptops now have built-in battery management systems, this node fills the gap for other devices by detecting the **exponential decay of the saturation stage** in the charging cycle through real-time monitoring of power consumption.
@@ -42,7 +42,7 @@ Below is an example flow demonstrating how to integrate the smartcharge-monitor 
 
 ## How It Works
 
-The `smartcharge-monitor` node uses a Kalman filter to refine power consumption data and accurately detect the _characteristic time constant_ of the exponential decay phase. When this time constant is within a valid range (typically around 1 hour), the node then wait for the power level to drop below the specified threshold before stopping the charging process.
+The `smartcharge-monitor` node uses a Kalman filter to refine power consumption data and accurately detect the _characteristic time constant_ of the exponential decay phase. When this time constant is within a valid range (typically around 1 hour), the node then waits for the power level to drop below the specified threshold before stopping the charging process.
 
 ## Contributing
 
