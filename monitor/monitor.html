@@ -7,6 +7,8 @@
       stddev: { value: 0.05 },
       timestep: { value: 20 },
       cutoff: { value: 85 },
+      chargerEfficiency: { value: 0.72 },
+      peakCharge: { value: 80 },
     },
     inputs: 1,
     outputs: 3,
@@ -31,6 +33,35 @@
     <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
     <input type="text" id="node-input-name" placeholder="Name" />
   </div>
+  <div class="form-row">
+    <button type="button" id="toggle-advanced-settings">Show Advanced Settings</button>
+  </div>
+  <!-- Advanced settings section -->
+  <div id="advanced-settings" style="display: none;">
+    <div class="form-row">
+      <label for="node-input-chargerEfficiency">Charger Efficiency</label>
+      <input type="text" id="node-input-chargerEfficiency" />
+    </div>
+    <div class="form-row">
+      <label for="node-input-peakCharge">Peak Charge</label>
+      <input type="text" id="node-input-peakCharge" />
+    </div>
+    <div class="form-row">
+      For more details about peak charge see <a href="https://batteryuniversity.com/article/bu-409-charging-lithium-ion" target="_blank">Battery University Article</a>
+    </div>
+  </div>
+  <script>
+    document.getElementById('toggle-advanced-settings').addEventListener('click', function() {
+      const advancedSettings = document.getElementById('advanced-settings');
+      if (advancedSettings.style.display === 'none') {
+        advancedSettings.style.display = 'block';
+        this.textContent = 'Hide Advanced Settings';
+      } else {
+        advancedSettings.style.display = 'none';
+        this.textContent = 'Show Advanced Settings';
+      }
+    });
+  </script>
 </script>
 
 <script type="text/html" data-help-name="smartcharge-monitor">

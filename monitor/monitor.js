@@ -8,12 +8,6 @@ const stdK = 0.77e-7;
 /** cusum mini k value (in hours^-1) */
 const w = 1 / 6.66;
 
-/** Default charge at peak power - see [battery university](https://batteryuniversity.com/article/bu-409-charging-lithium-ion) article */
-const peakCharge = 80.5;
-
-/** Charger efficiency */
-const chargerEfficiency = 0.67;
-
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
   /** @this {import("node-red").Node} */
@@ -26,6 +20,12 @@ const nodeInit = (RED) => {
     const node = this;
     /** @type {number} target charge% */
     const maxCharge = config.cutoff || 85;
+
+    /** @type {number} peak charge% */
+    const peakCharge = config.peakCharge || 80;
+
+    /** @type {number} charger efficiency */
+    const chargerEfficiency = config.chargerEfficiency || 0.72;
 
     /** @type {import("./types").Props} */
     let props;
@@ -74,14 +74,14 @@ const nodeInit = (RED) => {
     const evalTrigger = (
       /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend
     ) => {
-      const threshold = (100 + 5 - maxCharge) / (100 + 5 - peakCharge); // 5 to compensate for actual end of charge @90% of saturation (TBC)
+      const threshold = (maxCharge - peakCharge) / (100 - peakCharge); // 5 to compensate for actual end of charge @90% of saturation (TBC)
       const [val, k] = props.kfSlow.mean();
       if (val === null || k === null) return;
 
       if (
-        props.triggerCusum > 2 &&
+        props.triggerCusum > 2 && // assumes 2 mins at w - FIXME constant
         props.maxPwr &&
-        val <= props.maxPwr * threshold
+        val <= props.maxPwr * (1 - 0.9 * threshold) // assumes 100% at 10% of max power - FIXME constant
       ) {
         node.log("Triggered");
         node.log(
@@ -129,9 +129,9 @@ const nodeInit = (RED) => {
       const isSettled = now - props.startTime > 1 * 60e3; // min 1 minutes
       const accel = isSettled ? k * 3600 * (0 - val) : null; // (Wh / h^2)
 
-      const hasDecay = kFast * 3600 > w;
+      const hasDecay = props.triggerCusum > w * 1;
       // save for later
-      if (!hasDecay) props.maxPwr = val;
+      if (kFast * 3600 < w) props.maxPwr = val; // !hasDecay ?
 
       if (val < 0.05) {
         node.status({

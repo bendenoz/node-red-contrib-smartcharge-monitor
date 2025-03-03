@@ -1,6 +1,6 @@
 {
   "name": "@bendenoz/node-red-smartcharge-monitor",
-  "version": "0.1.25",
+  "version": "1.0.1",
   "description": "Node-RED custom node for intelligent monitoring and optimization of battery charging based on power consumption insights.",
   "repository": {
     "url": "git+ssh://git@github.com/bendenoz/node-red-contrib-smartcharge-monitor.git"
