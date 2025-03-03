@@ -4,8 +4,6 @@
     color: "#a6bbcf",
     defaults: {
       name: { value: "" },
-      stddev: { value: 0.05 },
-      timestep: { value: 20 },
       cutoff: { value: 85 },
       chargerEfficiency: { value: 0.72 },
       peakCharge: { value: 80 },
@@ -21,6 +19,16 @@
     label: function () {
       return this.name || "smartcharge-monitor";
     },
+    oneditprepare: function () {
+      $("#smartcharge-toggle-advanced-settings").on("click", function () {
+        $("#smartcharge-advanced-settings").toggle();
+        if ($("#smartcharge-advanced-settings").is(":visible")) {
+          $(this).text("Hide Advanced Settings");
+        } else {
+          $(this).text("Show Advanced Settings");
+        }
+      });
+    },
   });
 </script>
 
@@ -34,10 +42,16 @@
     <input type="text" id="node-input-name" placeholder="Name" />
   </div>
   <div class="form-row">
-    <button type="button" id="toggle-advanced-settings">Show Advanced Settings</button>
+    <button
+      type="button"
+      id="smartcharge-toggle-advanced-settings"
+      class="red-ui-button"
+    >
+      Show Advanced Settings
+    </button>
   </div>
   <!-- Advanced settings section -->
-  <div id="advanced-settings" style="display: none;">
+  <div id="smartcharge-advanced-settings" style="display: none;">
     <div class="form-row">
       <label for="node-input-chargerEfficiency">Charger Efficiency</label>
       <input type="text" id="node-input-chargerEfficiency" />
@@ -47,26 +61,72 @@
       <input type="text" id="node-input-peakCharge" />
     </div>
     <div class="form-row">
-      For more details about peak charge see <a href="https://batteryuniversity.com/article/bu-409-charging-lithium-ion" target="_blank">Battery University Article</a>
+      For more details about peak charge see
+      <a
+        href="https://batteryuniversity.com/article/bu-409-charging-lithium-ion"
+        target="_blank"
+        >Battery University Article</a
+      >
     </div>
   </div>
-  <script>
-    document.getElementById('toggle-advanced-settings').addEventListener('click', function() {
-      const advancedSettings = document.getElementById('advanced-settings');
-      if (advancedSettings.style.display === 'none') {
-        advancedSettings.style.display = 'block';
-        this.textContent = 'Hide Advanced Settings';
-      } else {
-        advancedSettings.style.display = 'none';
-        this.textContent = 'Show Advanced Settings';
-      }
-    });
-  </script>
 </script>
 
 <script type="text/html" data-help-name="smartcharge-monitor">
   <p>
     Node-RED custom node for intelligent monitoring and optimization of battery
-    charging based on power consumption insights
+    charging based on power consumption insights.
+  </p>
+
+  <h3>Inputs</h3>
+  <dl class="message-properties">
+    <dt>payload <span class="property-type">number</span></dt>
+    <dd>The power from the battery charger.</dd>
+  </dl>
+
+  <h3>Outputs</h3>
+  <ol class="node-ports">
+    <li>
+      Charge power
+      <dl class="message-properties">
+        <dt>payload <span class="property-type">number</span></dt>
+        <dd>The current power being used to charge the battery, in Watts.</dd>
+      </dl>
+    </li>
+    <li>
+      Charge acceleration
+      <dl class="message-properties">
+        <dt>payload <span class="property-type">number</span></dt>
+        <dd>The rate of change of the charging power, in Watts per hour.</dd>
+      </dl>
+    </li>
+    <li>
+      OFF trigger
+      <dl class="message-properties">
+        <dt>payload <span class="property-type">boolean</span></dt>
+        <dd>
+          Message sent when charging should be turned off. Always `false`.
+        </dd>
+      </dl>
+    </li>
+  </ol>
+
+  <h3>Details</h3>
+  <p>
+    The <code>smartcharge-monitor</code> node uses a Kalman filter to refine
+    power consumption data and accurately detect the characteristic time
+    constant of the exponential decay phase. When this time constant is within a
+    valid range (typically around 1 hour), the node then waits for the power
+    level to drop below the specified threshold before stopping the charging
+    process.
+  </p>
+
+  <h3>References</h3>
+  <p>
+    For more information on charging cycles, refer to
+    <a
+      href="https://batteryuniversity.com/article/bu-409-charging-lithium-ion"
+      target="_blank"
+      >Battery University</a
+    >.
   </p>
 </script>
