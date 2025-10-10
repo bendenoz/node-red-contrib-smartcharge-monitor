@@ -95,8 +95,8 @@ const nodeInit = (RED) => {
           if (props.finishing) {
             node.log("Sending OFF");
             nodeSend([
-              null,
-              null,
+              { payload: 0 }, // optimistic zero
+              { payload: 0 },
               { payload: false }, // OFF payload
             ]);
             props.finishing = false;

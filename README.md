@@ -10,6 +10,8 @@ The idea is to prevent overcharging, extend battery life, and minimize energy wa
 **Requirements:** A connected power plug with power reading capability.  
 **Tested With:** Primarily tested with the [Meross smart plug](https://flows.nodered.org/node/node-red-contrib-meross) (MSS310 / MSS315), but should be compatible with other smart plugs that support power monitoring.
 
+> ⚠️ Multi-cell batteries (e.g., those in electric bikes, scooters, and drones) should still be fully charged every few weeks or months to ensure proper cell balancing by the <span title="Battery Management System">BMS</span>. Additionally, this node will usually not work on smartphones unless they are switched off, as the phone's operating system consumption interferes with the power readings.
+
 ## 📦 Installation
 
 To install the node, use the following command in your Node-RED user directory (typically `~/.node-red`):
@@ -36,9 +38,9 @@ Below is an example flow demonstrating how to integrate the smartcharge-monitor 
 
 ## Configuration
 
-- **Cutoff**: The target charge percentage to stop charging.
+- **Cutoff**: The target charge percentage to stop charging. Typically 85%, you can go down to ~82% but you may get false positives.
 - **Charger Efficiency**: Specifies the efficiency of the charger. Used primarily to estimate the actual available power after charging.
-- **Peak Charge**: Defines the battery state of charge from which the exponential decay phase becomes noticeable.
+- **Peak Charge**: Defines the battery state of charge from which the exponential decay phase becomes noticeable. 80% is a good start.
 
 ## How It Works
 

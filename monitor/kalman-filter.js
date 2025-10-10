@@ -2,6 +2,13 @@
 
 const KalmanClass = require("kalman-filter/lib/kalman-filter");
 const StateType = require("kalman-filter/lib/state");
+const {
+  subtract: sub,
+  add,
+  matMul,
+  transpose,
+  invert,
+} = require("simple-linalg");
 
 require("kalman-filter"); // must be required to init default models
 
@@ -63,7 +70,7 @@ class KalmanFilter {
           init: {
             mean: [[initValue], [0]],
             // Initial P
-            covariance: [100 ** 2, 1e-3 ** 2],
+            covariance: [100 ** 2, /* (this.kStdev / 10) *  */ 1e-3 ** 2],
             index: -1,
           },
           transition: ({ previousCorrected, timestep }) => {
@@ -83,9 +90,22 @@ class KalmanFilter {
             noiseFactor,
           }) => {
             const target = 0;
+
+            // continuous white acceleration noise (CWNA)
+            const qNoise = (noiseFactor * this.kStdev) ** 2;
+            const C = target - pwr;
+            const pwrVar = (qNoise * C ** 2 * timestep ** 3) / 3;
+            const correlVal = (qNoise * C * timestep ** 2) / 2;
+            const kVar = qNoise * timestep;
+            return [
+              [pwrVar, correlVal],
+              [correlVal, kVar],
+            ];
+
+            // old - was very close
             const kNoise = noiseFactor * this.kStdev * timestep ** 0.5;
             const rateNoise = Math.abs(target - pwr) * kNoise;
-            const pwrNoise = rateNoise * timestep;
+            const pwrNoise = (rateNoise * timestep) / 1.5; // divide by 1.5 because integration(?)
             const correl = 1; // assume full correlation
             return [
               [pwrNoise ** 2, correl * pwrNoise * kNoise],
@@ -132,6 +152,62 @@ class KalmanFilter {
    */
   correct(value, ts) {
     if (!this.kf) throw new Error("No KF instance");
+    if (!this.state) throw new Error("No State");
+
+    // calculate mahalanobis and logLikelihood
+
+    // Not using this.kf.observation.mahalanobis() because we need S for logL, and it looks broken
+    // this.mahalanobis = this.state.mahalanobis({
+    //   kf: this.kf,
+    //   observation: [value],
+    //   obsIndexes: [0],
+    // });
+
+    /** aka H ([[1,0]] here) */
+    const stateProjection = this.kf.getValue(
+      this.kf.observation.stateProjection
+    );
+    const predictedObservation = this.kf.getPredictedObservation({
+      stateProjection,
+      opts: { predicted: this.state },
+    });
+
+    /** ν (nu) */
+    const innovation = sub([[value]], predictedObservation);
+
+    // calculate Normalized Innovation Squared (NIS)
+
+    const R = this.kf.observation.covariance; // call this.kf.getValue() if needed
+
+    /** S = H · P · Hᵀ + R — could be simplified to P + R  for 1D case */
+    const S = add(
+      matMul(
+        matMul(stateProjection, this.state.covariance),
+        transpose(stateProjection)
+      ),
+      R
+    );
+
+    const S_inv = invert(S);
+
+    /**
+     * NIS = innovationᵀ·inv(S)·innovation — aka squared [Mahalanobis](https://en.wikipedia.org/wiki/Mahalanobis_distance)
+     * Could be simplified to ν² / S for 1D case
+     */
+    const nis = matMul(matMul(transpose(innovation), S_inv), innovation)[0][0];
+
+    const detS = S[0][0]; // 1x1 matrix !
+    // Compute necessary logarithms
+    const logDetS = Math.log(detS); // log determinant of S
+    const log2Pi = Math.log(2 * Math.PI);
+
+    // Compute the log-likelihood using the multivariate normal PDF formula
+    // logLikelihood = -0.5 * (nis + n * log(2π) + log(detS))
+    const logLikelihood = -0.5 * (nis + 1 * log2Pi + logDetS);
+
+    this.logL = logLikelihood;
+    this.nis = nis;
+
     const corrected = this.kf.correct({
       predicted: this.state,
       observation: [value],
