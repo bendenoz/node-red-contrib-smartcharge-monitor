@@ -32,7 +32,7 @@
   },
   "license": "MIT",
   "scripts": {
-    "build": "babel monitor -d dist/monitor/ --ignore **/*.test.js",
+    "build": "babel monitor -d dist/monitor/ --ignore monitor/monitor.test.js,monitor/kalman-filter.test.js",
     "test": "jest"
   }
 }

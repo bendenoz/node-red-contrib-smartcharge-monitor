@@ -12,8 +12,6 @@ const {
 
 require("kalman-filter"); // must be required to init default models
 
-const pwrStdev = 0.08; // measured 0.05 - 0.07 - TODO: Make adjustable
-
 class KalmanFilter {
   /** @type {KalmanClass | undefined} */
   kf;
@@ -45,10 +43,18 @@ class KalmanFilter {
   kStdev;
 
   /**
-   * @param {number} kStdev process std dev
+   * pwrStdev - power standard deviation
+   * @type {number}
    */
-  constructor(kStdev) {
+  pwrStdev;
+
+  /**
+   * @param {number} kStdev process std dev
+   * @param {number} pwrStdev power std dev
+   */
+  constructor(kStdev, pwrStdev) {
     this.kStdev = kStdev;
+    this.pwrStdev = pwrStdev;
   }
 
   /**
@@ -62,7 +68,7 @@ class KalmanFilter {
         observation: {
           dimension: 1,
           // R
-          covariance: [[pwrStdev ** 2]],
+          covariance: [[this.pwrStdev ** 2]],
         },
         dynamic: {
           // name: "exponential decay",
@@ -242,6 +248,5 @@ class KalmanFilter {
 }
 
 module.exports = {
-  pwrStdev,
   KalmanFilter,
 };

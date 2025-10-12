@@ -3,10 +3,10 @@ import { KalmanFilter } from "./kalman-filter";
 export type Props = {
   kfSlow: KalmanFilter;
   kfFast: KalmanFilter;
+  /** fuse weights */
+  mu: [number, number];
   /** last push timestamp */
   lastPush: number;
-  /** in h^1 ⋅ min */
-  cusum: number;
   /** in h^1 ⋅ min, aka normalized time for a k of 1 h^-1 */
   triggerCusum: number;
   /** Total Ws */

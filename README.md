@@ -1,6 +1,6 @@
 # Node-RED SmartCharge Monitor
 
-**Node-RED custom node for intelligent monitoring and optimization of battery charging based on power consumption insights.**  
+**Node-RED custom node for monitoring and optimizing battery charging. Charge your bike and power bank up to 85%.**  
 This node aims to bring **smart charging capabilities** to **non-smart lithium-based battery devices** that typically lack such features, including electrical bikes, scooters, drones, power tools, vacuum cleaners, wireless mice, gaming controllers, portable speakers, power banks, and more. While many phones and laptops now have built-in battery management systems, this node fills the gap for other devices by detecting the **exponential decay of the saturation stage** in the charging cycle through real-time monitoring of power consumption.
 
 The idea is to prevent overcharging, extend battery life, and minimize energy waste.

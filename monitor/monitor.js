@@ -1,5 +1,6 @@
-const { KalmanFilter, pwrStdev } = require("./kalman-filter");
+const { KalmanFilter } = require("./kalman-filter");
 const { State } = require("kalman-filter");
+const { matMul, transpose } = require("simple-linalg");
 
 /** @typedef {import("node-red").NodeMessage} NodeMessage */
 
@@ -7,6 +8,13 @@ const stdK = 0.77e-7;
 
 /** cusum mini k value (in hours^-1) */
 const w = 1 / 6.66;
+
+const p11 = 0.995; // ~ 1 - deltaT / tauSlow
+const p22 = 0.925; // ~ 1 - deltaT / tauFast
+const Pi = [
+  [p11, 1 - p11], // from slow -> [slow, fast]
+  [1 - p22, p22], // from fast -> [slow, fast]
+];
 
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
@@ -27,16 +35,19 @@ const nodeInit = (RED) => {
     /** @type {number} charger efficiency */
     const chargerEfficiency = config.chargerEfficiency || 0.72;
 
+    /** @type {number} power standard deviation */
+    const pwrStdev = config.pwrStdev || 0.15;
+
     /** @type {import("./types").Props} */
     let props;
 
     const initProps = (/** @type {number} */ now) => {
       /** @type {import("./types").Props} */
       const p = {
-        kfSlow: new KalmanFilter(stdK), // display filter
-        kfFast: new KalmanFilter(400 * stdK), // cusum (detection) filter
+        kfSlow: new KalmanFilter(stdK, pwrStdev), // display filter
+        kfFast: new KalmanFilter(50 * stdK, pwrStdev), // cusum (detection) filter
+        mu: [1, 0], // fast at first
         lastPush: now,
-        cusum: 0,
         triggerCusum: 0,
         energy: props ? props.energy : 0,
         battCap: props ? props.battCap : 0,
@@ -53,30 +64,44 @@ const nodeInit = (RED) => {
     props = initProps(Date.now());
     node.log("Props initialized");
 
-    const evalCusum = (/** @type {number} */ timestep) => {
+    const evalCusum = (/** @type {number} in seconds */ timestep) => {
       const [, kSlow] = props.kfSlow.mean();
       const [, kFast] = props.kfFast.mean();
       if (kFast === null || kSlow === null) return;
 
+      const kFuse = props.mu[0] * kSlow + props.mu[1] * kFast;
+
       /** k in hour^-1 */
-      const kH = kFast * 3600;
+      const kH = kFuse * 3600;
 
-      const inc = (kH - kSlow * 3600 - w) * (timestep / 60);
-      props.cusum = Math.max(0, props.cusum + inc);
-      if (inc > 0) props.cusum += w * (timestep / 60);
-
-      const triggerInc = (kH - w) * (timestep / 60);
+      const triggerInc = (kH - w) * (timestep / 60); // again, hour^-1 ⋅ min
       props.triggerCusum = Math.max(0, props.triggerCusum + triggerInc);
       if (triggerInc > 0) props.triggerCusum += w * (timestep / 60);
       else props.triggerCusum = 0;
+    };
+
+    const getFused = () => {
+      const [valSlow, kSlow] = props.kfSlow.mean();
+      const [valFast, kFast] = props.kfFast.mean();
+      if (
+        valSlow === null ||
+        kSlow === null ||
+        valFast === null ||
+        kFast === null
+      )
+        return [null, null];
+
+      const val = props.mu[0] * valSlow + props.mu[1] * valFast;
+      const k = props.mu[0] * kSlow + props.mu[1] * kFast;
+      return [val, k];
     };
 
     const evalTrigger = (
       /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend
     ) => {
       const threshold = (maxCharge - peakCharge) / (100 - peakCharge); // 5 to compensate for actual end of charge @90% of saturation (TBC)
-      const [val, k] = props.kfSlow.mean();
-      if (val === null || k === null) return;
+      const [val, k] = getFused();
+      if (val === null || k === null) return false;
 
       if (
         props.triggerCusum > 2 && // assumes 2 mins at w - FIXME constant
@@ -100,7 +125,6 @@ const nodeInit = (RED) => {
               { payload: false }, // OFF payload
             ]);
             props.finishing = false;
-            props.cusum = 0;
             props.triggerCusum = 0;
             // more like props = initProps(); ?
             // + keep looping anyway?
@@ -115,9 +139,8 @@ const nodeInit = (RED) => {
       /** @type {number} */ now,
       /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend
     ) => {
-      const [val, k] = props.kfSlow.mean();
-      const [, kFast] = props.kfFast.mean();
-      if (val === null || k === null || kFast === null) return;
+      const [val, k] = getFused();
+      if (val === null || k === null) return false;
 
       const dt = (now - props.lastPush) / 1e3;
       props.energy += val * chargerEfficiency * dt;
@@ -126,12 +149,11 @@ const nodeInit = (RED) => {
       /** in Wh */
       const nrg = props.energy / 3600;
 
-      const isSettled = now - props.startTime > 1 * 60e3; // min 1 minutes
-      const accel = isSettled ? k * 3600 * (0 - val) : null; // (Wh / h^2)
+      const accel = k * 3600 * (0 - val);
 
       const hasDecay = props.triggerCusum > w * 1;
       // save for later
-      if (kFast * 3600 < w) props.maxPwr = val; // !hasDecay ?
+      if (k * 3600 < w) props.maxPwr = val; // !hasDecay ?
 
       if (val < 0.05) {
         node.status({
@@ -170,7 +192,7 @@ const nodeInit = (RED) => {
       props.timeout = setTimeout(() => {
         const now = Date.now();
         const timestep = (now - props.kfFast.stateTS) / 1000;
-        props.kfSlow.predict(now, props.cusum > 0.2 ? 30 * props.cusum : 1);
+        props.kfSlow.predict(now);
         props.kfFast.predict(now);
         pushOut(now, nodeSend);
         evalCusum(timestep);
@@ -204,17 +226,17 @@ const nodeInit = (RED) => {
         const reInit = () => {
           props.kfSlow.init(pv, now);
           props.kfFast.init(pv, now);
+          props.mu = [1, 0];
           props.lastPush = now;
-          props.cusum = 0;
           props.triggerCusum = 0;
           props.startTime = now;
           pushOut(now, nodeSend);
           if (done) done();
         };
 
-        /** timestep (before predict !) */
+        /** timestep, in second (before predict !) */
         const timestep = (now - props.kfFast.stateTS) / 1000;
-        props.kfSlow.predict(now, props.cusum > 0.2 ? 30 * props.cusum : 1);
+        props.kfSlow.predict(now);
         props.kfFast.predict(now);
 
         const [prevVal] = props.kfSlow.mean();
@@ -234,47 +256,42 @@ const nodeInit = (RED) => {
           return;
         }
 
-        // then detect noise
-        const error = prevVal === null ? 0 : Math.abs(pv - prevVal);
-        const noise = props.kfSlow.state?.covariance[0][0] ** 0.5 + pwrStdev;
-        const noiseReset = error > 2.5 * noise;
-        if (noiseReset) {
-          node.log(
-            `Noise reset: ${error.toFixed(2)}W (${(error / noise).toFixed(1)}σ)`
-          );
-          props.kfSlow.state =
-            props.kfFast.state && new State(props.kfFast.state);
-        }
-
         props.kfSlow.correct(pv, now);
         props.kfFast.correct(pv, now);
 
-        // finally check for incoherent k values
-        const [, correctedKFast] = props.kfFast.mean();
-        if (correctedKFast !== null) {
-          // reset on time constant less than 10 minutes
-          if (correctedKFast * 60 > 10 ** -1) {
-            node.log(
-              `reinit on time constant too high (1 / ${(
-                (correctedKFast * 60) **
-                -1
-              ).toFixed(0)} min^-1)`
-            );
-            reInit();
-            return;
-          }
+        const mahalanobis = /** @type {number} */ (props.kfFast.nis) ** 0.5;
+        if (mahalanobis > 3 && mahalanobis >= 0.2 * pv) {
+          // reset !
+          reInit();
+          return;
+        } else {
+          // go MMAE (Multiple Model Adaptive Estimation)
+          const logL = /** @type {number[]} */ ([
+            props.kfSlow.logL ?? Number.NEGATIVE_INFINITY,
+            props.kfFast.logL ?? Number.NEGATIVE_INFINITY,
+          ]);
 
-          // reset on time constant less than -20 minutes
-          if (correctedKFast * 60 < -(20 ** -1)) {
-            node.log(
-              `reinit on high negative time constant (-1 / ${(
-                (-correctedKFast * 60) **
-                -1
-              ).toFixed(0)} min^-1)`
+          const muPrior =
+            /** @type {[number, number]} */
+            (
+              matMul(transpose(Pi), [[props.mu[0]], [props.mu[1]]]).map(
+                (v) => v[0]
+              )
             );
-            reInit();
-            return;
+          // normalize and update mu (numerically stable, guard against under/overflow)
+          const maxLogL = Math.max(...logL);
+          let weights =
+            /** @type {[number, number]} */
+            (muPrior.map((m, i) => m * Math.exp(logL[i] - maxLogL)));
+          let muSum = weights.reduce((a, b) => a + b, 0);
+          if (!isFinite(muSum) || muSum === 0) {
+            // fallback to uniform prior if weights collapsed
+            weights = [0.5, 0.5];
+            muSum = 1;
           }
+          props.mu = /** @type {[number, number]} */ (
+            weights.map((w) => w / muSum)
+          );
         }
 
         pushOut(now, nodeSend);
@@ -291,7 +308,7 @@ const nodeInit = (RED) => {
         clearTimeout(props.timeout);
         props.timeout = null;
       }
-      props = initProps();
+      props = initProps(Date.now());
     });
   }
 
