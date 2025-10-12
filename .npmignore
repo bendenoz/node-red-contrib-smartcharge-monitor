@@ -3,5 +3,6 @@ node_modules/
 fixtures/
 tests/
 local/
+out/
 *.test.js
 *.spec.js
