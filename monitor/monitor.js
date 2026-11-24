@@ -38,11 +38,13 @@ const nodeInit = (RED) => {
         imm: new IMMFilter({ stdK, pwrStdev }),
         lastPush: now,
         triggerCusum: 0,
-        energy: props ? props.energy : 0,
-        battCap: props ? props.battCap : 0,
-        maxPwr: props ? props.maxPwr : 0,
-        timeout: props ? props.timeout : null,
+        energy: 0,
+        battCap: 0,
+        maxPwr: 0,
+        timeout: null,
+        finishTimeout: null,
         finishing: false,
+        offSent: false,
         startTime: now,
       };
       p.imm.init(0, now);
@@ -59,10 +61,8 @@ const nodeInit = (RED) => {
       /** k in hour^-1 */
       const kH = kFuse * 3600;
 
-      const triggerInc = (kH - w) * (timestep / 60); // again, hour^-1 ⋅ min
+      const triggerInc = (kH - w) * (timestep / 60); // hour^-1 ⋅ min
       props.triggerCusum = Math.max(0, props.triggerCusum + triggerInc);
-      if (triggerInc > 0) props.triggerCusum += w * (timestep / 60);
-      else props.triggerCusum = 0;
     };
 
     const getFused = () => props.imm.mean();
@@ -70,6 +70,8 @@ const nodeInit = (RED) => {
     const evalTrigger = (
       /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend
     ) => {
+      if (props.finishing || props.offSent) return false;
+
       const threshold = (maxCharge - peakCharge) / (100 - peakCharge); // 5 to compensate for actual end of charge @90% of saturation (TBC)
       const [val, k] = getFused();
       if (val === null || k === null) return false;
@@ -87,7 +89,8 @@ const nodeInit = (RED) => {
         );
         props.finishing = true;
         // wrap in timeout to avoid simultaneous read / write on some devices (Meross)
-        setTimeout(() => {
+        props.finishTimeout = setTimeout(() => {
+          props.finishTimeout = null;
           if (props.finishing) {
             node.log("Sending OFF");
             nodeSend([
@@ -96,9 +99,8 @@ const nodeInit = (RED) => {
               { payload: false }, // OFF payload
             ]);
             props.finishing = false;
+            props.offSent = true;
             props.triggerCusum = 0;
-            // more like props = initProps(); ?
-            // + keep looping anyway?
           }
         }, 2000);
         return true;
@@ -113,9 +115,9 @@ const nodeInit = (RED) => {
       const [val, k] = getFused();
       if (val === null || k === null) return false;
 
-      const dt = (now - props.lastPush) / 1e3;
+      const dt = Math.max(0, (now - props.lastPush) / 1e3);
       props.energy += val * chargerEfficiency * dt;
-      props.lastPush = now;
+      props.lastPush = Math.max(now, props.lastPush);
 
       /** in Wh */
       const nrg = props.energy / 3600;
@@ -123,8 +125,8 @@ const nodeInit = (RED) => {
       const accel = k * 3600 * (0 - val);
 
       const hasDecay = props.triggerCusum > w * 1;
-      // save for later
-      if (k * 3600 < w) props.maxPwr = val; // !hasDecay ?
+      // Retain peak power observed while not in decay
+      if (k * 3600 < w) props.maxPwr = Math.max(props.maxPwr, val);
 
       if (val < 0.05) {
         node.status({
@@ -166,14 +168,14 @@ const nodeInit = (RED) => {
         props.imm.predict(now);
         pushOut(now, nodeSend);
         evalCusum(timestep);
-        if (!evalTrigger(nodeSend)) scheduleUpdate(nodeSend);
+        if (!evalTrigger(nodeSend) && !props.offSent) scheduleUpdate(nodeSend);
       }, timeout);
     };
 
     node.on("input", (msg, send, done) => {
       const pv = Number(msg.payload);
       if (props.finishing) {
-        done();
+        if (done) done();
         return;
       }
 
@@ -199,7 +201,7 @@ const nodeInit = (RED) => {
           props.triggerCusum = 0;
           props.startTime = now;
           pushOut(now, nodeSend);
-          if (pv !== 0) scheduleUpdate(nodeSend);
+          if (pv !== 0 && !props.offSent) scheduleUpdate(nodeSend);
           if (done) done();
         };
 
@@ -215,8 +217,12 @@ const nodeInit = (RED) => {
             node.log("Start detected");
             props.energy = 0;
             props.battCap = 0;
+            props.maxPwr = 0;
+            props.offSent = false;
           } else {
             node.log("Stop detected");
+            props.maxPwr = 0;
+            props.offSent = false;
           }
           reInit();
           return;
@@ -235,7 +241,7 @@ const nodeInit = (RED) => {
 
         pushOut(now, nodeSend);
         evalCusum(timestep);
-        if (!evalTrigger(nodeSend)) scheduleUpdate(nodeSend); // TODO: evalTrigger should call scheduleUpdate ?
+        if (!evalTrigger(nodeSend) && !props.offSent) scheduleUpdate(nodeSend); // TODO: evalTrigger should call scheduleUpdate ?
       } else {
         node.status({ fill: "red", shape: "dot", text: "Bad input value" });
       }
@@ -246,6 +252,10 @@ const nodeInit = (RED) => {
       if (props.timeout) {
         clearTimeout(props.timeout);
         props.timeout = null;
+      }
+      if (props.finishTimeout) {
+        clearTimeout(props.finishTimeout);
+        props.finishTimeout = null;
       }
       props = initProps(Date.now());
     });

@@ -132,6 +132,172 @@ describe("Monitor Node", () => {
     node.closeCallback();
   });
 
+  it("should latch OFF until Stop detected and reset maxPwr between sessions", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 82 });
+
+    // Session 1: 100 W steady plateau, then decay down past cutoff
+    let t = 0;
+    for (let i = 0; i < 15; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 100 }, send, done);
+    }
+    // Slight dip while still flat should not shrink maxPwr (e.g. 99 W)
+    t += 20000;
+    jest.setSystemTime(new Date(startTime + t));
+    node.inputCallback({ payload: 99 }, send, done);
+
+    const kTrue = 2.0 / 3600;
+    for (let i = 1; i <= 25; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 100 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      jest.advanceTimersByTime(2500);
+    }
+
+    const offCalls = send.mock.calls.filter(
+      ([msgs]) => msgs[2] && msgs[2].payload === false
+    );
+    expect(offCalls).toHaveLength(1);
+    // Peak maxPwr was logged as 100.0 W (not shrunk to 99.0 W)
+    const schedLog = node.log.mock.calls.find(
+      ([msg]) => typeof msg === "string" && msg.startsWith("Scheduling one time OFF")
+    );
+    expect(schedLog[0]).toContain("/ 100.0 W");
+
+    // Continue sending decaying power -> should NOT emit a second OFF
+    for (let i = 26; i <= 35; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 100 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      jest.advanceTimersByTime(2500);
+    }
+    const offCallsAfter = send.mock.calls.filter(
+      ([msgs]) => msgs[2] && msgs[2].payload === false
+    );
+    expect(offCallsAfter).toHaveLength(1);
+
+    // Stop detected (0 W), then new 10 W session should reset maxPwr and allow a fresh OFF
+    t += 20000;
+    jest.setSystemTime(new Date(startTime + t));
+    node.inputCallback({ payload: 0 }, send, done);
+
+    for (let i = 0; i < 15; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 10 }, send, done);
+    }
+    for (let i = 1; i <= 25; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 10 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      jest.advanceTimersByTime(2500);
+    }
+    const offCallsSession2 = send.mock.calls.filter(
+      ([msgs]) => msgs[2] && msgs[2].payload === false
+    );
+    expect(offCallsSession2).toHaveLength(2);
+    const schedLogs = node.log.mock.calls.filter(
+      ([msg]) => typeof msg === "string" && msg.startsWith("Scheduling one time OFF")
+    );
+    expect(schedLogs[1][0]).toContain("/ 10.0 W");
+
+    node.closeCallback();
+  });
+
+  it("should clear pending 2s finishTimeout on close without sending OFF", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 82 });
+
+    let t = 0;
+    for (let i = 0; i < 10; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 50 }, send, done);
+    }
+
+    const kTrue = 2.5 / 3600;
+    let triggered = false;
+    for (let i = 1; i <= 30 && !triggered; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 50 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      triggered = node.log.mock.calls.some(([m]) => m === "Triggered");
+    }
+    expect(triggered).toBe(true);
+
+    // Close before the 2s finishTimeout expires
+    node.closeCallback();
+    jest.advanceTimersByTime(5000);
+
+    const offCalls = send.mock.calls.filter(
+      ([msgs]) => msgs[2] && msgs[2].payload === false
+    );
+    expect(offCalls).toHaveLength(0);
+  });
+
+  it("should accumulate CUSUM without wiping on a single noisy sample", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 82 });
+
+    let t = 0;
+    for (let i = 0; i < 15; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 50 }, send, done);
+    }
+
+    // Decay until yellow status (hasDecay: triggerCusum > w) appears
+    const kTrue = 2.0 / 3600;
+    let sawYellow = false;
+    for (let i = 1; i <= 10; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 50 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      const lastStatus =
+        node.status.mock.calls[node.status.mock.calls.length - 1][0];
+      if (lastStatus.fill === "yellow") {
+        sawYellow = true;
+        break;
+      }
+    }
+    expect(sawYellow).toBe(true);
+
+    // A single flat/noisy sample should not hard-reset triggerCusum to 0
+    t += 20000;
+    jest.setSystemTime(new Date(startTime + t));
+    node.inputCallback({ payload: 47 }, send, done);
+    const statusAfterNoise =
+      node.status.mock.calls[node.status.mock.calls.length - 1][0];
+    expect(statusAfterNoise.fill).toBe("yellow");
+
+    node.closeCallback();
+  });
+
   it("should process ninebot fixture data correctly", () => {
     const dataPath = path.join(__dirname, "..", "fixtures", "data-ninebot.csv");
     const csvData = fs.readFileSync(dataPath, "utf8");

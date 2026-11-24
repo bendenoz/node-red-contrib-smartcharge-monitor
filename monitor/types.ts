@@ -13,7 +13,9 @@ export type Props = {
   /** Max detected power when cusum == 0 */
   maxPwr: number;
   timeout: ReturnType<typeof setTimeout> | null;
+  finishTimeout: ReturnType<typeof setTimeout> | null;
   finishing: boolean;
+  offSent: boolean;
   /** Charge start time */
   startTime: number;
 };
