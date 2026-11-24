@@ -22,8 +22,23 @@ class KalmanFilter {
   /** @type {StateType | null} */
   previousCorrected = null;
 
-  /** @type {[number, number]} */
-  K = [0, 0];
+  /**
+   * innovation from last correct() call
+   * @type {number | null}
+   */
+  innovation = null;
+
+  /**
+   * log-likelihood from last correct() call
+   * @type {number | null}
+   */
+  logL = null;
+
+  /**
+   * Normalized Innovation Squared from last correct() call
+   * @type {number | null}
+   */
+  nis = null;
 
   /**
    * previous timestamp, in milliseconds
@@ -107,16 +122,6 @@ class KalmanFilter {
               [pwrVar, correlVal],
               [correlVal, kVar],
             ];
-
-            // old - was very close
-            const kNoise = noiseFactor * this.kStdev * timestep ** 0.5;
-            const rateNoise = Math.abs(target - pwr) * kNoise;
-            const pwrNoise = (rateNoise * timestep) / 1.5; // divide by 1.5 because integration(?)
-            const correl = 1; // assume full correlation
-            return [
-              [pwrNoise ** 2, correl * pwrNoise * kNoise],
-              [correl * pwrNoise * kNoise, kNoise ** 2],
-            ];
           },
         },
       });
@@ -128,11 +133,22 @@ class KalmanFilter {
     this.stateTS = initTs;
     this.previousCorrected = this.state;
     this.correctTS = initTs;
+    this.innovation = null;
+    this.logL = null;
+    this.nis = null;
   }
 
-  resetCovariance() {
-    if (!this.state || !this.kf) return;
-    this.state.covariance = this.kf.getInitState().covariance;
+  /**
+   * Replace previousCorrected state (used by IMM mixing)
+   * @param {number[][]} mean
+   * @param {number[][]} covariance
+   */
+  setPreviousCorrected(mean, covariance) {
+    this.previousCorrected = new StateType({
+      mean,
+      covariance,
+      index: this.previousCorrected ? this.previousCorrected.index : -1,
+    });
   }
 
   /**
@@ -141,15 +157,18 @@ class KalmanFilter {
    * @param {number} [noiseFactor=1] - Noise factor
    */
   predict(ts, noiseFactor = 1) {
-    if (!this.kf || !this.correctTS) throw new Error("No KF instance");
-    const timestep = (ts - this.correctTS) / 1000;
+    if (!this.kf || this.correctTS === undefined) {
+      throw new Error("No KF instance");
+    }
+    const rawTimestep = (ts - this.correctTS) / 1000;
+    const timestep = rawTimestep > 0 ? rawTimestep : 0;
     const predicted = this.kf.predict({
       previousCorrected: this.previousCorrected,
       timestep,
       noiseFactor,
     });
     this.state = predicted;
-    this.stateTS = ts;
+    this.stateTS = Math.max(ts, this.correctTS);
   }
 
   /**
@@ -202,7 +221,7 @@ class KalmanFilter {
      */
     const nis = matMul(matMul(transpose(innovation), S_inv), innovation)[0][0];
 
-    const detS = S[0][0]; // 1x1 matrix !
+    const detS = Math.max(S[0][0], Number.MIN_VALUE); // 1x1 matrix
     // Compute necessary logarithms
     const logDetS = Math.log(detS); // log determinant of S
     const log2Pi = Math.log(2 * Math.PI);
@@ -211,17 +230,21 @@ class KalmanFilter {
     // logLikelihood = -0.5 * (nis + n * log(2π) + log(detS))
     const logLikelihood = -0.5 * (nis + 1 * log2Pi + logDetS);
 
-    this.logL = logLikelihood;
-    this.nis = nis;
+    this.innovation = innovation[0][0];
+    this.logL = Number.isFinite(logLikelihood)
+      ? logLikelihood
+      : Number.NEGATIVE_INFINITY;
+    this.nis = Number.isFinite(nis) ? nis : 0;
 
     const corrected = this.kf.correct({
       predicted: this.state,
       observation: [value],
     });
+    const effectiveTs = Math.max(ts, this.correctTS ?? ts);
     this.previousCorrected = corrected;
-    this.correctTS = ts; // = this.stateTS ? since predict is called first
+    this.correctTS = effectiveTs;
     this.state = corrected;
-    this.stateTS = ts;
+    this.stateTS = effectiveTs;
   }
 
   /** @return {[number | null, number | null]} */
@@ -231,13 +254,6 @@ class KalmanFilter {
 
   count() {
     return this.state === null ? 0 : this.state.index;
-  }
-
-  /** Approximate delay, in sample count */
-  delay() {
-    const K = this.K[0][0];
-    const tc = -1 / Math.log(1 - K);
-    return 2 * Math.log(2) * tc; // 1.4 time constant
   }
 
   // Get the current standard deviation

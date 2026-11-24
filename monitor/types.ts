@@ -1,10 +1,7 @@
-import { KalmanFilter } from "./kalman-filter";
+import { IMMFilter } from "./imm-filter";
 
 export type Props = {
-  kfSlow: KalmanFilter;
-  kfFast: KalmanFilter;
-  /** fuse weights */
-  mu: [number, number];
+  imm: IMMFilter;
   /** last push timestamp */
   lastPush: number;
   /** in h^1 ⋅ min, aka normalized time for a k of 1 h^-1 */

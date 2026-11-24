@@ -1,6 +1,4 @@
-const { KalmanFilter } = require("./kalman-filter");
-const { State } = require("kalman-filter");
-const { matMul, transpose } = require("simple-linalg");
+const { IMMFilter } = require("./imm-filter");
 
 /** @typedef {import("node-red").NodeMessage} NodeMessage */
 
@@ -8,13 +6,6 @@ const stdK = 0.77e-7;
 
 /** cusum mini k value (in hours^-1) */
 const w = 1 / 6.66;
-
-const p11 = 0.995; // ~ 1 - deltaT / tauSlow
-const p22 = 0.925; // ~ 1 - deltaT / tauFast
-const Pi = [
-  [p11, 1 - p11], // from slow -> [slow, fast]
-  [1 - p22, p22], // from fast -> [slow, fast]
-];
 
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
@@ -44,9 +35,7 @@ const nodeInit = (RED) => {
     const initProps = (/** @type {number} */ now) => {
       /** @type {import("./types").Props} */
       const p = {
-        kfSlow: new KalmanFilter(stdK, pwrStdev), // display filter
-        kfFast: new KalmanFilter(50 * stdK, pwrStdev), // cusum (detection) filter
-        mu: [1, 0], // fast at first
+        imm: new IMMFilter({ stdK, pwrStdev }),
         lastPush: now,
         triggerCusum: 0,
         energy: props ? props.energy : 0,
@@ -56,8 +45,7 @@ const nodeInit = (RED) => {
         finishing: false,
         startTime: now,
       };
-      p.kfSlow.init(0, now);
-      p.kfFast.init(0, now);
+      p.imm.init(0, now);
       return p;
     };
 
@@ -65,11 +53,8 @@ const nodeInit = (RED) => {
     node.log("Props initialized");
 
     const evalCusum = (/** @type {number} in seconds */ timestep) => {
-      const [, kSlow] = props.kfSlow.mean();
-      const [, kFast] = props.kfFast.mean();
-      if (kFast === null || kSlow === null) return;
-
-      const kFuse = props.mu[0] * kSlow + props.mu[1] * kFast;
+      const [, kFuse] = props.imm.mean();
+      if (kFuse === null) return;
 
       /** k in hour^-1 */
       const kH = kFuse * 3600;
@@ -80,21 +65,7 @@ const nodeInit = (RED) => {
       else props.triggerCusum = 0;
     };
 
-    const getFused = () => {
-      const [valSlow, kSlow] = props.kfSlow.mean();
-      const [valFast, kFast] = props.kfFast.mean();
-      if (
-        valSlow === null ||
-        kSlow === null ||
-        valFast === null ||
-        kFast === null
-      )
-        return [null, null];
-
-      const val = props.mu[0] * valSlow + props.mu[1] * valFast;
-      const k = props.mu[0] * kSlow + props.mu[1] * kFast;
-      return [val, k];
-    };
+    const getFused = () => props.imm.mean();
 
     const evalTrigger = (
       /** @type {(msg: NodeMessage | Array<NodeMessage | NodeMessage[] | null>) => void} */ nodeSend
@@ -191,9 +162,8 @@ const nodeInit = (RED) => {
     ) => {
       props.timeout = setTimeout(() => {
         const now = Date.now();
-        const timestep = (now - props.kfFast.stateTS) / 1000;
-        props.kfSlow.predict(now);
-        props.kfFast.predict(now);
+        const timestep = Math.max(0, (now - props.imm.stateTS) / 1000);
+        props.imm.predict(now);
         pushOut(now, nodeSend);
         evalCusum(timestep);
         if (!evalTrigger(nodeSend)) scheduleUpdate(nodeSend);
@@ -224,9 +194,7 @@ const nodeInit = (RED) => {
         const now = Date.now();
 
         const reInit = () => {
-          props.kfSlow.init(pv, now);
-          props.kfFast.init(pv, now);
-          props.mu = [1, 0];
+          props.imm.init(pv, now);
           props.lastPush = now;
           props.triggerCusum = 0;
           props.startTime = now;
@@ -235,11 +203,10 @@ const nodeInit = (RED) => {
         };
 
         /** timestep, in second (before predict !) */
-        const timestep = (now - props.kfFast.stateTS) / 1000;
-        props.kfSlow.predict(now);
-        props.kfFast.predict(now);
+        const timestep = Math.max(0, (now - props.imm.stateTS) / 1000);
+        props.imm.predict(now);
 
-        const [prevVal] = props.kfSlow.mean();
+        const [prevVal] = props.imm.mean();
 
         // Check for reset conditions
 
@@ -256,42 +223,15 @@ const nodeInit = (RED) => {
           return;
         }
 
-        props.kfSlow.correct(pv, now);
-        props.kfFast.correct(pv, now);
+        props.imm.step(pv, now);
 
-        const mahalanobis = /** @type {number} */ (props.kfFast.nis) ** 0.5;
-        if (mahalanobis > 3 && mahalanobis >= 0.2 * pv) {
+        const mahalanobis =
+          /** @type {number} */ (props.imm.kfFast.nis ?? 0) ** 0.5;
+        const absInnovation = Math.abs(props.imm.kfFast.innovation ?? 0);
+        if (mahalanobis > 3 && absInnovation >= 0.2 * pv) {
           // reset !
           reInit();
           return;
-        } else {
-          // go MMAE (Multiple Model Adaptive Estimation)
-          const logL = /** @type {number[]} */ ([
-            props.kfSlow.logL ?? Number.NEGATIVE_INFINITY,
-            props.kfFast.logL ?? Number.NEGATIVE_INFINITY,
-          ]);
-
-          const muPrior =
-            /** @type {[number, number]} */
-            (
-              matMul(transpose(Pi), [[props.mu[0]], [props.mu[1]]]).map(
-                (v) => v[0]
-              )
-            );
-          // normalize and update mu (numerically stable, guard against under/overflow)
-          const maxLogL = Math.max(...logL);
-          let weights =
-            /** @type {[number, number]} */
-            (muPrior.map((m, i) => m * Math.exp(logL[i] - maxLogL)));
-          let muSum = weights.reduce((a, b) => a + b, 0);
-          if (!isFinite(muSum) || muSum === 0) {
-            // fallback to uniform prior if weights collapsed
-            weights = [0.5, 0.5];
-            muSum = 1;
-          }
-          props.mu = /** @type {[number, number]} */ (
-            weights.map((w) => w / muSum)
-          );
         }
 
         pushOut(now, nodeSend);
