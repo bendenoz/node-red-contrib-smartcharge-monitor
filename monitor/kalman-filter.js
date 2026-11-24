@@ -22,19 +22,35 @@ class KalmanFilter {
   /** @type {StateType | null} */
   previousCorrected = null;
 
-  /** @type {[number, number]} */
-  K = [0, 0];
+  /**
+   * innovation from last correct() call
+   * @type {number | null}
+   */
+  innovation = null;
+
+  /**
+   * log-likelihood from last correct() call
+   * @type {number | null}
+   */
+  logL = null;
+
+  /**
+   * Normalized Innovation Squared from last correct() call
+   * @type {number | null}
+   */
+  nis = null;
 
   /**
    * previous timestamp, in milliseconds
    * @type {number}
    */
-  stateTS;
+  stateTS = 0;
+
   /**
    * previous timestamp, in milliseconds
    * @type {number}
    */
-  correctTS;
+  correctTS = 0;
 
   /**
    * k noise - in units per second per square-rooted second (not units^2)
@@ -63,6 +79,9 @@ class KalmanFilter {
    * @param {number} initTs
    */
   init(initValue, initTs) {
+    if (!Number.isFinite(initValue) || !Number.isFinite(initTs)) {
+      throw new TypeError("initValue and initTs must be finite numbers");
+    }
     try {
       this.kf = new KalmanClass({
         observation: {
@@ -107,16 +126,6 @@ class KalmanFilter {
               [pwrVar, correlVal],
               [correlVal, kVar],
             ];
-
-            // old - was very close
-            const kNoise = noiseFactor * this.kStdev * timestep ** 0.5;
-            const rateNoise = Math.abs(target - pwr) * kNoise;
-            const pwrNoise = (rateNoise * timestep) / 1.5; // divide by 1.5 because integration(?)
-            const correl = 1; // assume full correlation
-            return [
-              [pwrNoise ** 2, correl * pwrNoise * kNoise],
-              [correl * pwrNoise * kNoise, kNoise ** 2],
-            ];
           },
         },
       });
@@ -128,11 +137,22 @@ class KalmanFilter {
     this.stateTS = initTs;
     this.previousCorrected = this.state;
     this.correctTS = initTs;
+    this.innovation = null;
+    this.logL = null;
+    this.nis = null;
   }
 
-  resetCovariance() {
-    if (!this.state || !this.kf) return;
-    this.state.covariance = this.kf.getInitState().covariance;
+  /**
+   * Replace previousCorrected state (used by IMM mixing)
+   * @param {number[][]} mean
+   * @param {number[][]} covariance
+   */
+  setPreviousCorrected(mean, covariance) {
+    this.previousCorrected = new StateType({
+      mean,
+      covariance,
+      index: this.previousCorrected ? this.previousCorrected.index : -1,
+    });
   }
 
   /**
@@ -141,15 +161,19 @@ class KalmanFilter {
    * @param {number} [noiseFactor=1] - Noise factor
    */
   predict(ts, noiseFactor = 1) {
-    if (!this.kf || !this.correctTS) throw new Error("No KF instance");
-    const timestep = (ts - this.correctTS) / 1000;
+    if (!this.kf) throw new Error("No KF instance");
+    if (!Number.isFinite(ts) || !Number.isFinite(noiseFactor)) {
+      throw new TypeError("ts and noiseFactor must be finite numbers");
+    }
+    const rawTimestep = (ts - this.correctTS) / 1000;
+    const timestep = rawTimestep > 0 ? rawTimestep : 0;
     const predicted = this.kf.predict({
       previousCorrected: this.previousCorrected,
       timestep,
       noiseFactor,
     });
     this.state = predicted;
-    this.stateTS = ts;
+    this.stateTS = Math.max(ts, this.correctTS);
   }
 
   /**
@@ -159,15 +183,9 @@ class KalmanFilter {
   correct(value, ts) {
     if (!this.kf) throw new Error("No KF instance");
     if (!this.state) throw new Error("No State");
-
-    // calculate mahalanobis and logLikelihood
-
-    // Not using this.kf.observation.mahalanobis() because we need S for logL, and it looks broken
-    // this.mahalanobis = this.state.mahalanobis({
-    //   kf: this.kf,
-    //   observation: [value],
-    //   obsIndexes: [0],
-    // });
+    if (!Number.isFinite(value) || !Number.isFinite(ts)) {
+      throw new TypeError("value and ts must be finite numbers");
+    }
 
     /** aka H ([[1,0]] here) */
     const stateProjection = this.kf.getValue(
@@ -180,8 +198,7 @@ class KalmanFilter {
 
     /** ν (nu) */
     const innovation = sub([[value]], predictedObservation);
-
-    // calculate Normalized Innovation Squared (NIS)
+    const nu = innovation[0][0];
 
     const R = this.kf.observation.covariance; // call this.kf.getValue() if needed
 
@@ -194,56 +211,57 @@ class KalmanFilter {
       R
     );
 
-    const S_inv = invert(S);
-
-    /**
-     * NIS = innovationᵀ·inv(S)·innovation — aka squared [Mahalanobis](https://en.wikipedia.org/wiki/Mahalanobis_distance)
-     * Could be simplified to ν² / S for 1D case
-     */
-    const nis = matMul(matMul(transpose(innovation), S_inv), innovation)[0][0];
-
-    const detS = S[0][0]; // 1x1 matrix !
-    // Compute necessary logarithms
-    const logDetS = Math.log(detS); // log determinant of S
     const log2Pi = Math.log(2 * Math.PI);
+    const sVal = S[0][0];
+    const S_inv = Number.isFinite(sVal) && sVal > Number.MIN_VALUE ? invert(S) : null;
 
-    // Compute the log-likelihood using the multivariate normal PDF formula
-    // logLikelihood = -0.5 * (nis + n * log(2π) + log(detS))
-    const logLikelihood = -0.5 * (nis + 1 * log2Pi + logDetS);
+    let corrected;
+    if (!S_inv) {
+      // Singular innovation covariance (e.g., pwrStdev === 0 and P[0][0] === 0)
+      this.innovation = nu;
+      this.nis = nu === 0 ? 0 : Number.POSITIVE_INFINITY;
+      this.logL =
+        nu === 0
+          ? -0.5 * (log2Pi + Math.log(Number.MIN_VALUE))
+          : Number.NEGATIVE_INFINITY;
+      corrected = new StateType({
+        mean: this.state.mean,
+        covariance: this.state.covariance,
+        index: (this.state.index ?? 0) + 1,
+      });
+    } else {
+      /**
+       * NIS = innovationᵀ·inv(S)·innovation — aka squared [Mahalanobis](https://en.wikipedia.org/wiki/Mahalanobis_distance)
+       * Could be simplified to ν² / S for 1D case
+       */
+      const nis = matMul(matMul(transpose(innovation), S_inv), innovation)[0][0];
+      const detS = Math.max(sVal, Number.MIN_VALUE); // 1x1 matrix
+      const logDetS = Math.log(detS);
+      const logLikelihood = -0.5 * (nis + 1 * log2Pi + logDetS);
 
-    this.logL = logLikelihood;
-    this.nis = nis;
+      this.innovation = nu;
+      this.logL = Number.isFinite(logLikelihood)
+        ? logLikelihood
+        : Number.NEGATIVE_INFINITY;
+      this.nis = Number.isFinite(nis) ? nis : 0;
 
-    const corrected = this.kf.correct({
-      predicted: this.state,
-      observation: [value],
-    });
+      corrected = this.kf.correct({
+        predicted: this.state,
+        observation: [value],
+      });
+    }
+
+    const effectiveTs = Math.max(ts, this.correctTS);
     this.previousCorrected = corrected;
-    this.correctTS = ts; // = this.stateTS ? since predict is called first
+    this.correctTS = effectiveTs;
     this.state = corrected;
-    this.stateTS = ts;
+    this.stateTS = effectiveTs;
   }
 
   /** @return {[number | null, number | null]} */
   mean() {
-    return this.state === null ? [null, null] : this.state.mean.map(([v]) => v);
-  }
-
-  count() {
-    return this.state === null ? 0 : this.state.index;
-  }
-
-  /** Approximate delay, in sample count */
-  delay() {
-    const K = this.K[0][0];
-    const tc = -1 / Math.log(1 - K);
-    return 2 * Math.log(2) * tc; // 1.4 time constant
-  }
-
-  // Get the current standard deviation
-  stddev() {
-    // the first entry in the predicted covariance is value variance
-    return this.state && this.state.covariance[0][0] ** 0.5;
+    if (this.state === null) return [null, null];
+    return [this.state.mean[0][0], this.state.mean[1][0]];
   }
 }
 

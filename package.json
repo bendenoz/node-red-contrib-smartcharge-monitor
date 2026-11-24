@@ -25,14 +25,15 @@
     "jest": "^29.7.0"
   },
   "dependencies": {
-    "kalman-filter": "^2.3.0"
+    "kalman-filter": "^2.3.0",
+    "simple-linalg": "^1.2.1"
   },
   "engines": {
     "node": ">=10.10.0"
   },
   "license": "MIT",
   "scripts": {
-    "build": "babel monitor -d dist/monitor/ --ignore monitor/monitor.test.js,monitor/kalman-filter.test.js",
+    "build": "babel monitor -d dist/monitor/ --ignore monitor/monitor.test.js,monitor/kalman-filter.test.js,monitor/imm-filter.test.js",
     "test": "jest"
   }
 }
