@@ -34,10 +34,17 @@ class IMMFilter {
    * @param {number} opts.pwrStdev - Measurement noise std dev
    * @param {[[number, number], [number, number]]} [opts.Pi] - Markov transition matrix
    */
-  constructor({ stdK, pwrStdev, Pi = /** @type {[[number, number], [number, number]]} */ (DEFAULT_PI) }) {
+  constructor({
+    stdK,
+    pwrStdev,
+    Pi = /** @type {[[number, number], [number, number]]} */ (DEFAULT_PI),
+  }) {
     this.kfSlow = new KalmanFilter(stdK, pwrStdev);
     this.kfFast = new KalmanFilter(50 * stdK, pwrStdev);
-    this.Pi = Pi;
+    this.Pi = [
+      [Pi[0][0], Pi[0][1]],
+      [Pi[1][0], Pi[1][1]],
+    ];
   }
 
   /**
@@ -46,6 +53,9 @@ class IMMFilter {
    * @param {number} initTs
    */
   init(initValue, initTs) {
+    if (!Number.isFinite(initValue) || !Number.isFinite(initTs)) {
+      throw new TypeError("initValue and initTs must be finite numbers");
+    }
     this.kfSlow.init(initValue, initTs);
     this.kfFast.init(initValue, initTs);
     this.mu = [0, 1]; // fast at first
@@ -59,6 +69,9 @@ class IMMFilter {
    * @param {number} ts - Timestamp in milliseconds
    */
   predict(ts) {
+    if (!Number.isFinite(ts)) {
+      throw new TypeError("ts must be a finite number");
+    }
     this.kfSlow.predict(ts);
     this.kfFast.predict(ts);
     this.stateTS = Math.max(ts, this.correctTS);
@@ -70,6 +83,9 @@ class IMMFilter {
    * @param {number} ts - Timestamp in milliseconds
    */
   step(value, ts) {
+    if (!Number.isFinite(value) || !Number.isFinite(ts)) {
+      throw new TypeError("value and ts must be finite numbers");
+    }
     const filters = [this.kfSlow, this.kfFast];
 
     // 1. Predicted mode probabilities c_j = sum_i Pi[i][j] * mu[i]
@@ -160,6 +176,17 @@ class IMMFilter {
     const effectiveTs = Math.max(ts, this.correctTS);
     this.correctTS = effectiveTs;
     this.stateTS = effectiveTs;
+  }
+
+  /**
+   * Innovation diagnostics from the fast mode filter
+   * @return {{ nis: number, innovation: number }}
+   */
+  fastInnovation() {
+    return {
+      nis: this.kfFast.nis ?? 0,
+      innovation: this.kfFast.innovation ?? 0,
+    };
   }
 
   /**

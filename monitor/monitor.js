@@ -199,13 +199,12 @@ const nodeInit = (RED) => {
           props.triggerCusum = 0;
           props.startTime = now;
           pushOut(now, nodeSend);
+          if (pv !== 0) scheduleUpdate(nodeSend);
           if (done) done();
         };
 
-        /** timestep, in second (before predict !) */
+        /** timestep, in second (before step!) */
         const timestep = Math.max(0, (now - props.imm.stateTS) / 1000);
-        props.imm.predict(now);
-
         const [prevVal] = props.imm.mean();
 
         // Check for reset conditions
@@ -225,10 +224,10 @@ const nodeInit = (RED) => {
 
         props.imm.step(pv, now);
 
-        const mahalanobis =
-          /** @type {number} */ (props.imm.kfFast.nis ?? 0) ** 0.5;
-        const absInnovation = Math.abs(props.imm.kfFast.innovation ?? 0);
-        if (mahalanobis > 3 && absInnovation >= 0.2 * pv) {
+        const { nis, innovation } = props.imm.fastInnovation();
+        const mahalanobis = Math.max(0, nis) ** 0.5;
+        const absInnovation = Math.abs(innovation);
+        if (mahalanobis > 3 && absInnovation >= 0.2 * Math.abs(pv)) {
           // reset !
           reInit();
           return;
