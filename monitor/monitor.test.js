@@ -361,6 +361,8 @@ describe("Monitor Node", () => {
     return { logs, offEvents, triggerInfo };
   };
 
+  // Ninebot trace ends at ~86.2% of plateau power (manually unplugged before 85% threshold),
+  // so cutoff: 82 (~91% plateau threshold) validates CV detection before unplug.
   it("should process ninebot fixture data correctly", () => {
     const { logs, offEvents, triggerInfo } = replayFixture("data-ninebot.csv", {
       cutoff: 82,
@@ -392,6 +394,21 @@ describe("Monitor Node", () => {
     expect(triggerInfo.powerW).toBeLessThan(triggerInfo.maxPwrW);
   });
 
+  it("should process powerbank fixture with default cutoff (85%)", () => {
+    const { logs, offEvents, triggerInfo } = replayFixture(
+      "data-noisy-powerbank.csv",
+      {}
+    );
+    expect(logs.some((l) => l.args[0] === "Start detected")).toBe(true);
+    expect(logs.some((l) => l.args[0] === "Stop detected")).toBe(true);
+    expect(offEvents).toHaveLength(1);
+    expect(offEvents[0].timeMin).toBeGreaterThan(320);
+    expect(offEvents[0].timeMin).toBeLessThan(340);
+    expect(triggerInfo).not.toBeNull();
+    expect(triggerInfo.powerW).toBeLessThan(triggerInfo.maxPwrW * 0.8);
+  });
+
+  // Watches draw active OS/display loads alongside battery charging; cutoff: 83 matches historical test target.
   it("should process applewatch fixture data correctly", () => {
     const { logs, offEvents, triggerInfo } = replayFixture(
       "data-apple-watch.csv",

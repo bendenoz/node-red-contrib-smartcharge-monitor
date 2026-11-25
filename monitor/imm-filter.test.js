@@ -251,4 +251,31 @@ describe("IMMFilter", () => {
       }
     }
   });
+
+  it("scales Pi with dt via exp(-dt/tau) unless fixed Pi is supplied", () => {
+    const imm = new IMMFilter({ stdK: 0.77e-7, pwrStdev: 0.15 });
+    imm.init(50, 0);
+
+    // dt == 0 -> identity transition
+    imm.step(50, 0);
+    expect(imm.Pi).toEqual([
+      [1, 0],
+      [0, 1],
+    ]);
+
+    // dt == 20 s -> matches ~0.995 and ~0.926
+    imm.step(50, 20000);
+    expect(imm.Pi[0][0]).toBeCloseTo(0.995, 3);
+    expect(imm.Pi[1][1]).toBeCloseTo(0.926, 3);
+
+    // dt == 60 s -> lower self-transition probabilities
+    imm.step(50, 80000);
+    expect(imm.Pi[0][0]).toBeCloseTo(Math.exp(-60 / 4000), 10);
+    expect(imm.Pi[1][1]).toBeCloseTo(Math.exp(-60 / 260), 10);
+
+    // Invalid tau throws
+    expect(
+      () => new IMMFilter({ stdK: 0.77e-7, pwrStdev: 0.15, tauSlow: 0 })
+    ).toThrow(TypeError);
+  });
 });

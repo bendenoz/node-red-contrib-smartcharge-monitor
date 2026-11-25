@@ -7,6 +7,9 @@ const stdK = 0.77e-7;
 /** cusum mini k value (in hours^-1) */
 const w = 1 / 6.66;
 
+/** cap per-step kH contribution to CUSUM so brief step transients don't dominate (hours^-1) */
+const maxCusumKH = 2.5;
+
 /** @type {import("node-red").NodeInitializer} */
 const nodeInit = (RED) => {
   /** @this {import("node-red").Node} */
@@ -58,8 +61,8 @@ const nodeInit = (RED) => {
       const [, kFuse] = props.imm.mean();
       if (kFuse === null) return;
 
-      /** k in hour^-1 */
-      const kH = kFuse * 3600;
+      /** k in hour^-1, winsorized to bound transient step spikes */
+      const kH = Math.min(kFuse * 3600, maxCusumKH);
 
       const triggerInc = (kH - w) * (timestep / 60); // hour^-1 ⋅ min
       props.triggerCusum = Math.max(0, props.triggerCusum + triggerInc);
@@ -78,6 +81,7 @@ const nodeInit = (RED) => {
 
       if (
         props.triggerCusum > 2 && // assumes 2 mins at w - FIXME constant
+        k * 3600 > w && // must still be actively decaying at trigger time
         props.maxPwr &&
         val <= props.maxPwr * (1 - 0.9 * threshold) // assumes 100% at 10% of max power - FIXME constant
       ) {
