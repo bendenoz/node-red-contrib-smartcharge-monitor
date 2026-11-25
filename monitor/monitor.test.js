@@ -12,8 +12,6 @@ describe("Monitor Node", () => {
   let config;
   let send;
   let done;
-  let inputData;
-  let originalPerformance;
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -40,17 +38,11 @@ describe("Monitor Node", () => {
     config = { cutoff: 85 };
     send = jest.fn();
     done = jest.fn();
-
-    // Save the original performance
-    originalPerformance = global.performance;
   });
 
   afterEach(() => {
     jest.useRealTimers();
     jest.restoreAllMocks();
-
-    // Restore the original performance
-    global.performance = originalPerformance;
   });
 
   it("should initialize properties correctly", () => {
@@ -74,30 +66,157 @@ describe("Monitor Node", () => {
     expect(done).toHaveBeenCalled();
   });
 
-  it("should handle bad input values", () => {
+  it("should reject non-numeric, empty, boolean, null, and negative payloads", () => {
     nodeInit(RED);
     const Monitor = RED.nodes.registerType.mock.calls[0][1];
     Monitor.call(node, config);
 
-    const msg = { payload: "bad value" };
-    node.inputCallback(msg, send, done);
-
-    expect(node.status).toHaveBeenCalledWith({
-      fill: "red",
-      shape: "dot",
-      text: "Bad input value",
-    });
-    expect(done).toHaveBeenCalled();
+    for (const bad of ["bad value", "", "   ", null, false, [], -1]) {
+      node.status.mockClear();
+      done.mockClear();
+      node.inputCallback({ payload: bad }, send, done);
+      expect(node.status).toHaveBeenCalledWith({
+        fill: "red",
+        shape: "dot",
+        text: "Bad input value",
+      });
+      expect(done).toHaveBeenCalled();
+    }
+    expect(node.log).not.toHaveBeenCalledWith("Stop detected");
   });
 
-  it("should clear timeout on close", () => {
+  it("should clear pending scheduleUpdate timeout on close", () => {
     nodeInit(RED);
     const Monitor = RED.nodes.registerType.mock.calls[0][1];
     Monitor.call(node, config);
 
-    node.closeCallback();
+    node.inputCallback({ payload: 50 }, send, done);
+    const callsBeforeClose = send.mock.calls.length;
 
-    expect(node.log).toHaveBeenCalledWith("Props initialized");
+    node.closeCallback();
+    jest.advanceTimersByTime(15000);
+
+    expect(send.mock.calls.length).toBe(callsBeforeClose);
+  });
+
+  it("should not schedule predict-only timers while idle at 0 W", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, config);
+
+    node.inputCallback({ payload: 0 }, send, done);
+    const callsAfterZero = send.mock.calls.length;
+
+    jest.advanceTimersByTime(20000);
+    expect(send.mock.calls.length).toBe(callsAfterZero);
+  });
+
+  it("should stop predict-only extrapolation after 30 s without measurements", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 82 });
+
+    let t = 0;
+    for (let i = 0; i < 10; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 50 }, send, done);
+    }
+    // Small dip (< 20% so no Mahalanobis reset, leaving k > 0), then telemetry goes silent
+    t += 20000;
+    jest.setSystemTime(new Date(startTime + t));
+    node.inputCallback({ payload: 44 }, send, done);
+    const callsAtSilence = send.mock.calls.length;
+
+    jest.advanceTimersByTime(600000);
+    // At most ~5 ticks within the 30 s horizon, and no false OFF
+    expect(send.mock.calls.length - callsAtSilence).toBeLessThanOrEqual(6);
+    const offCalls = send.mock.calls.filter(
+      ([msgs]) => msgs[2] && msgs[2].payload === false
+    );
+    expect(offCalls).toHaveLength(0);
+
+    node.closeCallback();
+  });
+
+  it("should handle Stop (0 W) during the 2 s finishing window without wedging next session", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 82 });
+
+    let t = 0;
+    for (let i = 0; i < 10; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 50 }, send, done);
+    }
+    const kTrue = 2.5 / 3600;
+    let triggered = false;
+    for (let i = 1; i <= 30 && !triggered; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 50 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      triggered = node.log.mock.calls.some(([m]) => m === "Triggered");
+    }
+    expect(triggered).toBe(true);
+
+    // Plug drops to 0 W 500 ms into the 2 s delay
+    t += 500;
+    jest.setSystemTime(new Date(startTime + t));
+    node.inputCallback({ payload: 0 }, send, done);
+    expect(node.log).toHaveBeenCalledWith("Stop detected");
+
+    // Advance past the 2 s window -> canceled finishTimeout must not emit OFF
+    jest.advanceTimersByTime(3000);
+    let offCalls = send.mock.calls.filter(
+      ([msgs]) => msgs[2] && msgs[2].payload === false
+    );
+    expect(offCalls).toHaveLength(0);
+
+    // Next session should work normally and still emit OFF
+    for (let i = 0; i < 12; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 30 }, send, done);
+    }
+    for (let i = 1; i <= 25; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 30 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      jest.advanceTimersByTime(2500);
+    }
+    offCalls = send.mock.calls.filter(
+      ([msgs]) => msgs[2] && msgs[2].payload === false
+    );
+    expect(offCalls).toHaveLength(1);
+
+    node.closeCallback();
+  });
+
+  it("should safely parse string and out-of-range config values", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, {
+      cutoff: "82",
+      peakCharge: "100",
+      chargerEfficiency: "0",
+      pwrStdev: "0",
+    });
+
+    node.inputCallback({ payload: 20 }, send, done);
+    jest.setSystemTime(new Date(startTime + 20000));
+    node.inputCallback({ payload: 20.1 }, send, done);
+    expect(send).toHaveBeenCalled();
+
+    node.closeCallback();
   });
 
   it("should continue predict-only ticks via scheduleUpdate after Start and Mahalanobis reset", () => {
@@ -301,7 +420,7 @@ describe("Monitor Node", () => {
   const replayFixture = (fixtureFile, monitorConfig) => {
     const dataPath = path.join(__dirname, "..", "fixtures", fixtureFile);
     const csvData = fs.readFileSync(dataPath, "utf8");
-    inputData = csvParse(csvData, {
+    const inputData = csvParse(csvData, {
       columns: true,
       skip_empty_lines: true,
       cast: true,

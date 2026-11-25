@@ -55,9 +55,10 @@ describe("IMMFilter", () => {
 
     // Spy on kfSlow.predict to capture the mixed previousCorrected passed into it
     const origPredict = imm.kfSlow.predict.bind(imm.kfSlow);
-    let capturedMixedMean;
-    let capturedMixedCov;
+    let capturedMixedMean = /** @type {number[][]} */ ([]);
+    let capturedMixedCov = /** @type {number[][]} */ ([]);
     jest.spyOn(imm.kfSlow, "predict").mockImplementation((ts, nf) => {
+      if (!imm.kfSlow.previousCorrected) throw new Error("Expected previousCorrected");
       capturedMixedMean = imm.kfSlow.previousCorrected.mean.map((r) => [...r]);
       capturedMixedCov = imm.kfSlow.previousCorrected.covariance.map((r) => [
         ...r,
@@ -90,6 +91,9 @@ describe("IMMFilter", () => {
       immB.step(val, ts);
     }
 
+    if (!immA.kfSlow.previousCorrected || !immA.kfFast.previousCorrected) {
+      throw new Error("Expected previousCorrected");
+    }
     const prevSlowMean = immA.kfSlow.previousCorrected.mean.map((r) => [...r]);
     const prevSlowCov = immA.kfSlow.previousCorrected.covariance.map((r) => [
       ...r,
@@ -106,8 +110,12 @@ describe("IMMFilter", () => {
     immA.predict(111000);
 
     const [valExtrapolated, kExtrapolated] = immA.mean();
+    expect(valBefore).not.toBeNull();
+    expect(valExtrapolated).not.toBeNull();
     expect(kExtrapolated).toBeGreaterThan(0);
-    expect(valExtrapolated).toBeLessThan(valBefore);
+    expect(/** @type {number} */ (valExtrapolated)).toBeLessThan(
+      /** @type {number} */ (valBefore)
+    );
 
     expect(immA.kfSlow.previousCorrected.mean).toEqual(prevSlowMean);
     expect(immA.kfSlow.previousCorrected.covariance).toEqual(prevSlowCov);
@@ -120,8 +128,8 @@ describe("IMMFilter", () => {
     // Next step() matches an identical filter that had no intermediate predict() ticks
     immA.step(47.0, 120000);
     immB.step(47.0, 120000);
-    expect(immA.mean()[0]).toBeCloseTo(immB.mean()[0], 12);
-    expect(immA.mean()[1]).toBeCloseTo(immB.mean()[1], 12);
+    expect(immA.mean()[0]).toBeCloseTo(/** @type {number} */ (immB.mean()[0]), 12);
+    expect(immA.mean()[1]).toBeCloseTo(/** @type {number} */ (immB.mean()[1]), 12);
     expect(immA.mu[0]).toBeCloseTo(immB.mu[0], 12);
   });
 
@@ -152,6 +160,7 @@ describe("IMMFilter", () => {
     expect(imm.mu[0] + imm.mu[1]).toBeCloseTo(1, 10);
 
     for (const kf of [imm.kfSlow, imm.kfFast]) {
+      if (!kf.previousCorrected) throw new Error("Expected previousCorrected");
       const P = kf.previousCorrected.covariance;
       expect(P[0][0]).toBeGreaterThan(0);
       expect(P[0][0] * P[1][1] - P[0][1] * P[1][0]).toBeGreaterThan(0);
@@ -159,13 +168,18 @@ describe("IMMFilter", () => {
     }
   });
 
-  it("handles pwrStdev === 0 without singular matrix crashes", () => {
+  it("handles pwrStdev === 0 across both dt = 0 and dt > 0 noisy inputs without throwing", () => {
     const imm = new IMMFilter({ stdK: 0.77e-7, pwrStdev: 0 });
     imm.init(10, 1000);
     imm.step(10, 1000);
     imm.step(10, 1000); // S = [[0]]
+    imm.step(10.001, 21000);
+    imm.step(9.999, 41000);
+    imm.step(10.002, 61000);
 
-    expect(imm.mean()).toEqual([10, 0]);
+    const [val, k] = imm.mean();
+    expect(Number.isFinite(val)).toBe(true);
+    expect(Number.isFinite(k)).toBe(true);
     expect(imm.mu[0] + imm.mu[1]).toBeCloseTo(1, 10);
   });
 
@@ -214,7 +228,8 @@ describe("IMMFilter", () => {
       if (imm.mu[1] > maxMuFast) maxMuFast = imm.mu[1];
     }
     expect(maxMuFast).toBeGreaterThan(0.5);
-    expect(imm.mean()[1] * 3600).toBeGreaterThan(0.5);
+    const [, kAfter] = imm.mean();
+    expect(/** @type {number} */ (kAfter) * 3600).toBeGreaterThan(0.5);
   });
 
   it("falls back to uniform weights if muPrior collapses to zero", () => {
@@ -244,6 +259,7 @@ describe("IMMFilter", () => {
 
       expect(imm.mu[0] + imm.mu[1]).toBeCloseTo(1, 10);
       for (const kf of [imm.kfSlow, imm.kfFast]) {
+        if (!kf.previousCorrected) throw new Error("Expected previousCorrected");
         const P = kf.previousCorrected.covariance;
         expect(P[0][0]).toBeGreaterThan(0);
         expect(P[0][0] * P[1][1] - P[0][1] * P[1][0]).toBeGreaterThan(0);
@@ -252,7 +268,7 @@ describe("IMMFilter", () => {
     }
   });
 
-  it("scales Pi with dt via exp(-dt/tau) unless fixed Pi is supplied", () => {
+  it("scales Pi via exact 2-state CTMC exp(Q*dt) without mode inversion on large gaps", () => {
     const imm = new IMMFilter({ stdK: 0.77e-7, pwrStdev: 0.15 });
     imm.init(50, 0);
 
@@ -268,10 +284,13 @@ describe("IMMFilter", () => {
     expect(imm.Pi[0][0]).toBeCloseTo(0.995, 3);
     expect(imm.Pi[1][1]).toBeCloseTo(0.926, 3);
 
-    // dt == 60 s -> lower self-transition probabilities
-    imm.step(50, 80000);
-    expect(imm.Pi[0][0]).toBeCloseTo(Math.exp(-60 / 4000), 10);
-    expect(imm.Pi[1][1]).toBeCloseTo(Math.exp(-60 / 260), 10);
+    // dt == 10000 s -> both rows approach stationary distribution [4000/4260, 260/4260]
+    imm.step(50, 10020000);
+    const statSlow = 4000 / 4260;
+    const statFast = 260 / 4260;
+    expect(imm.Pi[0][0]).toBeCloseTo(statSlow, 4);
+    expect(imm.Pi[1][0]).toBeCloseTo(statSlow, 4);
+    expect(imm.Pi[1][1]).toBeCloseTo(statFast, 4);
 
     // Invalid tau throws
     expect(
