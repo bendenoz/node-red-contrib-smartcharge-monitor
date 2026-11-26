@@ -4,11 +4,20 @@ const { IMMFilter } = require("./imm-filter");
 
 const stdK = 0.77e-7;
 
-/** cusum mini k value (in hours^-1) */
+/** minimum active decay rate (in hours^-1) */
 const w = 1 / 6.66;
 
-/** cap per-step kH contribution to CUSUM so brief step transients don't dominate (hours^-1) */
-const maxCusumKH = 2.5;
+/** one-sided Wald z-score threshold for triggering OFF (~99.87% confidence k > w) */
+const waldTriggerZ = 3;
+
+/** consecutive corrected samples with kZ >= waldTriggerZ required to confirm decay */
+const minWaldConfirmSamples = 2;
+
+/** consecutive corrected samples with kZ <= 0 required to re-anchor localPeak after decay */
+const minFlatSamples = 3;
+
+/** one-sided Wald z-score threshold for highlighting active decay in node status */
+const waldYellowZ = 1.5;
 
 /** max elapsed ms since last measurement to extrapolate in scheduleUpdate */
 const maxPredictGapMs = 30000;
@@ -84,7 +93,10 @@ const nodeInit = (RED) => {
       const p = {
         imm: new IMMFilter({ stdK, pwrStdev }),
         lastPush: now,
-        triggerCusum: 0,
+        localPeak: 0,
+        inDecay: false,
+        waldStreak: 0,
+        flatStreak: 0,
         energy: 0,
         maxPwr: 0,
         timeout: null,
@@ -100,17 +112,6 @@ const nodeInit = (RED) => {
     props = initProps(Date.now());
     node.log("Props initialized");
 
-    const evalCusum = (/** @type {number} in seconds */ timestep) => {
-      const [, kFuse] = props.imm.mean();
-      if (kFuse === null) return;
-
-      /** k in hour^-1, winsorized to bound transient step spikes */
-      const kH = Math.min(kFuse * 3600, maxCusumKH);
-
-      const triggerInc = (kH - w) * (timestep / 60); // hour^-1 ⋅ min
-      props.triggerCusum = Math.max(0, props.triggerCusum + triggerInc);
-    };
-
     const getFused = () => props.imm.mean();
 
     const evalTrigger = (
@@ -122,15 +123,22 @@ const nodeInit = (RED) => {
       const [val, k] = getFused();
       if (val === null || k === null) return false;
 
+      const kZ = props.imm.kZScore(w);
+      const powerRatio = 1 - 0.9 * threshold; // assumes 100% at 10% of max power - FIXME constant
+
       if (
-        props.triggerCusum > 2 && // assumes 2 mins at w - FIXME constant
-        k * 3600 > w && // must still be actively decaying at trigger time
+        kZ >= waldTriggerZ &&
+        props.waldStreak >= minWaldConfirmSamples &&
         props.maxPwr &&
-        val <= props.maxPwr * (1 - 0.9 * threshold) // assumes 100% at 10% of max power - FIXME constant
+        val <= props.maxPwr * powerRatio &&
+        (!props.localPeak || val <= props.localPeak * powerRatio)
       ) {
+        const refPwr = props.localPeak
+          ? Math.min(props.maxPwr, props.localPeak)
+          : props.maxPwr;
         node.log("Triggered");
         node.log(
-          `Scheduling one time OFF, ${val.toFixed(1)} / ${props.maxPwr.toFixed(
+          `Scheduling one time OFF, ${val.toFixed(1)} / ${refPwr.toFixed(
             1
           )} W, k=${(k * 3600).toFixed(2)}`
         );
@@ -147,7 +155,11 @@ const nodeInit = (RED) => {
             ]);
             props.finishing = false;
             props.offSent = true;
-            props.triggerCusum = 0;
+            node.status({
+              fill: "blue",
+              shape: "dot",
+              text: `OFF sent - total ${(props.energy / 3600).toFixed(1)} Wh`,
+            });
           }
         }, 2000);
         return true;
@@ -171,9 +183,11 @@ const nodeInit = (RED) => {
 
       const accel = k * 3600 * (0 - val) || 0;
 
-      const hasDecay = props.triggerCusum > w * 1;
+      const kZ = props.imm.kZScore(w);
+      const hasDecay = kZ >= waldYellowZ;
       // Retain peak power observed while not in decay
       if (k * 3600 < w) props.maxPwr = Math.max(props.maxPwr, val);
+      if (!props.inDecay) props.localPeak = Math.max(props.localPeak, val);
 
       if (val < 0.05) {
         node.status({
@@ -188,17 +202,25 @@ const nodeInit = (RED) => {
         else if (dispAccel < -0.5) dir = "↘";
         if (dispAccel > 1) dir = "↑";
         else if (dispAccel > 0.5) dir = "↗";
-        node.status({
-          fill: hasDecay ? "yellow" : "green",
-          shape: "ring",
-          text: `${dir} ${val.toFixed(2)} W - total ${nrg.toFixed(1)} Wh`,
-        });
+        if (props.offSent) {
+          node.status({
+            fill: "blue",
+            shape: "dot",
+            text: `${dir} ${val.toFixed(2)} W - OFF sent (${nrg.toFixed(1)} Wh)`,
+          });
+        } else {
+          node.status({
+            fill: hasDecay ? "yellow" : "green",
+            shape: "ring",
+            text: `${dir} ${val.toFixed(2)} W - total ${nrg.toFixed(1)} Wh`,
+          });
+        }
       }
 
       nodeSend([
-        { payload: val, topic: "value" }, // this is rate (Wh / h)
+        { payload: val, topic: "value" }, // this is rate (W)
         {
-          payload: accel, // this is acceleration (Wh / h^2)
+          payload: accel, // rate of change of power (W / h)
           topic: "rate",
         },
         null,
@@ -215,14 +237,12 @@ const nodeInit = (RED) => {
         if (now - props.imm.correctTS >= maxPredictGapMs) {
           return;
         }
-        const timestep = Math.max(0, (now - props.imm.stateTS) / 1000);
         props.imm.predict(now);
         const [predVal] = getFused();
         if (predVal !== null && predVal <= 0) {
           return;
         }
         pushOut(now, nodeSend);
-        evalCusum(timestep);
         if (!evalTrigger(nodeSend) && !props.offSent) scheduleUpdate(nodeSend);
       }, timeout);
     };
@@ -262,21 +282,25 @@ const nodeInit = (RED) => {
         };
 
       if (isValidPv) {
-        // in value => predicts, check for reset (filter, cusum, not energy?), or correct, evaluate cusum, pushResult
+        // in value => predicts, check for reset, or correct, pushResult and evaluate trigger
         const now = Date.now();
 
-        const reInit = () => {
+        const reInit = (accPwr = 0) => {
+          if (accPwr > 0 && now > props.lastPush) {
+            props.energy +=
+              accPwr * chargerEfficiency * ((now - props.lastPush) / 1e3);
+          }
           props.imm.init(pv, now);
           props.lastPush = now;
-          props.triggerCusum = 0;
-          props.startTime = now;
+          props.localPeak = pv;
+          props.inDecay = false;
+          props.waldStreak = 0;
+          props.flatStreak = 0;
           pushOut(now, nodeSend);
           if (pv !== 0 && !props.offSent) scheduleUpdate(nodeSend);
           if (done) done();
         };
 
-        /** timestep, in second (before step!) */
-        const timestep = Math.max(0, (now - props.imm.stateTS) / 1000);
         const [prevVal] = props.imm.mean();
 
         // Check for reset conditions
@@ -288,12 +312,15 @@ const nodeInit = (RED) => {
             props.energy = 0;
             props.maxPwr = 0;
             props.offSent = false;
+            props.startTime = now;
+            reInit(0);
           } else {
             node.log("Stop detected");
+            const wasOffSent = props.offSent;
             props.maxPwr = 0;
             props.offSent = false;
+            reInit(wasOffSent ? 0 : (prevVal ?? 0));
           }
-          reInit();
           return;
         }
 
@@ -304,12 +331,27 @@ const nodeInit = (RED) => {
         const absInnovation = Math.abs(innovation);
         if (mahalanobis > 3 && absInnovation >= 0.2 * Math.abs(pv)) {
           // reset !
-          reInit();
+          reInit(prevVal ?? 0);
           return;
         }
 
+        // Update measurement-only confirmation & plateau hysteresis counters
+        const [curVal] = getFused();
+        const kZ = props.imm.kZScore(w);
+        props.waldStreak = kZ >= waldTriggerZ ? props.waldStreak + 1 : 0;
+        if (kZ > 0) {
+          props.inDecay = true;
+          props.flatStreak = 0;
+        } else {
+          props.flatStreak += 1;
+          if (props.inDecay && props.flatStreak >= minFlatSamples && curVal !== null) {
+            props.localPeak = curVal;
+            props.inDecay = false;
+            props.flatStreak = 0;
+          }
+        }
+
         pushOut(now, nodeSend);
-        evalCusum(timestep);
         const triggered = pv !== 0 && evalTrigger(nodeSend);
         if (pv !== 0 && !triggered && !props.offSent) scheduleUpdate(nodeSend); // TODO: evalTrigger should call scheduleUpdate ?
       } else {

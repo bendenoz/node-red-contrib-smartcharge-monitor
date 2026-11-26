@@ -12,8 +12,14 @@ export type Props = {
   imm: IMMFilter;
   /** last push timestamp */
   lastPush: number;
-  /** in h^-1 ⋅ min, aka normalized time for a k of 1 h^-1 */
-  triggerCusum: number;
+  /** Local plateau peak for current segment (W) */
+  localPeak: number;
+  /** Whether kZ > 0 was entered during current segment */
+  inDecay: boolean;
+  /** Consecutive corrected samples with kZ >= waldTriggerZ */
+  waldStreak: number;
+  /** Consecutive corrected samples with kZ <= 0 after entering decay */
+  flatStreak: number;
   /** Total Ws */
   energy: number;
   /** Peak detected power while not in decay */
