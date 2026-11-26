@@ -63,6 +63,7 @@ function runFixtureWithIMM(fixtureFile, outFileName) {
     expect(Number.isFinite(meanFast)).toBe(true);
 
     for (const kf of [imm.kfSlow, imm.kfFast]) {
+      if (!kf.previousCorrected) throw new Error("Expected previousCorrected");
       const P = kf.previousCorrected.covariance;
       expect(P[0][0]).toBeGreaterThan(0);
       expect(P[0][0] * P[1][1] - P[0][1] * P[1][0]).toBeGreaterThan(0);

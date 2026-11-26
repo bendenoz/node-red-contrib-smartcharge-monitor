@@ -2,12 +2,36 @@
 
 const { KalmanFilter } = require("./kalman-filter");
 
-const DEFAULT_P11 = 0.995; // ~ 1 - deltaT / tauSlow
-const DEFAULT_P22 = 0.925; // ~ 1 - deltaT / tauFast
-const DEFAULT_PI = [
-  [DEFAULT_P11, 1 - DEFAULT_P11], // from slow -> [slow, fast]
-  [1 - DEFAULT_P22, DEFAULT_P22], // from fast -> [slow, fast]
-];
+const DEFAULT_TAU_SLOW = 4000; // s (~66.7 min, p11 ~ 0.995 at dt = 20 s)
+const DEFAULT_TAU_FAST = 260; // s (~4.3 min, p22 ~ 0.926 at dt = 20 s)
+
+/**
+ * Compute exact 2-state continuous-time Markov chain (CTMC) transition matrix exp(Q * dt)
+ * with transition rates lambda_12 = 1 / tauSlow and lambda_21 = 1 / tauFast.
+ * @param {number} dt
+ * @param {number} [tauSlow=DEFAULT_TAU_SLOW]
+ * @param {number} [tauFast=DEFAULT_TAU_FAST]
+ * @return {[[number, number], [number, number]]}
+ */
+function transitionMatrix(
+  dt,
+  tauSlow = DEFAULT_TAU_SLOW,
+  tauFast = DEFAULT_TAU_FAST
+) {
+  const safeDt = dt > 0 ? dt : 0;
+  const lambda12 = 1 / tauSlow;
+  const lambda21 = 1 / tauFast;
+  const totalRate = lambda12 + lambda21;
+  const decay = Math.exp(-totalRate * safeDt);
+  const p11 = (lambda21 + lambda12 * decay) / totalRate;
+  const p22 = (lambda12 + lambda21 * decay) / totalRate;
+  return [
+    [p11, 1 - p11], // from slow -> [slow, fast]
+    [1 - p22, p22], // from fast -> [slow, fast]
+  ];
+}
+
+const DEFAULT_PI = transitionMatrix(20, DEFAULT_TAU_SLOW, DEFAULT_TAU_FAST);
 
 class IMMFilter {
   /** @type {KalmanFilter} */
@@ -18,6 +42,15 @@ class IMMFilter {
 
   /** @type {[[number, number], [number, number]]} */
   Pi;
+
+  /** @type {boolean} */
+  fixedPi;
+
+  /** @type {number} */
+  tauSlow;
+
+  /** @type {number} */
+  tauFast;
 
   /** @type {[number, number]} */
   mu = [0, 1];
@@ -32,18 +65,29 @@ class IMMFilter {
    * @param {object} opts
    * @param {number} opts.stdK - Base process noise std dev for slow mode
    * @param {number} opts.pwrStdev - Measurement noise std dev
-   * @param {[[number, number], [number, number]]} [opts.Pi] - Markov transition matrix
+   * @param {[[number, number], [number, number]]} [opts.Pi] - Optional fixed Markov transition matrix
+   * @param {number} [opts.tauSlow=DEFAULT_TAU_SLOW] - Slow mode dwell time constant (seconds)
+   * @param {number} [opts.tauFast=DEFAULT_TAU_FAST] - Fast mode dwell time constant (seconds)
    */
   constructor({
     stdK,
     pwrStdev,
-    Pi = /** @type {[[number, number], [number, number]]} */ (DEFAULT_PI),
+    Pi,
+    tauSlow = DEFAULT_TAU_SLOW,
+    tauFast = DEFAULT_TAU_FAST,
   }) {
+    if (!Number.isFinite(tauSlow) || tauSlow <= 0 || !Number.isFinite(tauFast) || tauFast <= 0) {
+      throw new TypeError("tauSlow and tauFast must be finite positive numbers");
+    }
     this.kfSlow = new KalmanFilter(stdK, pwrStdev);
     this.kfFast = new KalmanFilter(50 * stdK, pwrStdev);
+    this.tauSlow = tauSlow;
+    this.tauFast = tauFast;
+    this.fixedPi = Boolean(Pi);
+    const basePi = Pi || DEFAULT_PI;
     this.Pi = [
-      [Pi[0][0], Pi[0][1]],
-      [Pi[1][0], Pi[1][1]],
+      [basePi[0][0], basePi[0][1]],
+      [basePi[1][0], basePi[1][1]],
     ];
   }
 
@@ -86,7 +130,14 @@ class IMMFilter {
     if (!Number.isFinite(value) || !Number.isFinite(ts)) {
       throw new TypeError("value and ts must be finite numbers");
     }
+    if (!this.kfSlow.kf || !this.kfFast.kf) {
+      throw new Error("No KF instance");
+    }
     const filters = [this.kfSlow, this.kfFast];
+    if (!this.fixedPi) {
+      const dt = Math.max(0, (ts - this.correctTS) / 1000);
+      this.Pi = transitionMatrix(dt, this.tauSlow, this.tauFast);
+    }
 
     // 1. Predicted mode probabilities c_j = sum_i Pi[i][j] * mu[i]
     const muPrior = [
@@ -105,8 +156,10 @@ class IMMFilter {
     });
 
     // 2. State & covariance mixing from previousCorrected
-    const prevStates = filters.map((f) => f.previousCorrected);
-    if (prevStates[0] && prevStates[1]) {
+    const prev0 = this.kfSlow.previousCorrected;
+    const prev1 = this.kfFast.previousCorrected;
+    if (prev0 && prev1) {
+      const prevPair = [prev0, prev1];
       /** @type {number[][][]} */
       const mixedMeans = [];
       /** @type {number[][][]} */
@@ -114,8 +167,8 @@ class IMMFilter {
 
       for (let j = 0; j < 2; j++) {
         const w = mixingWeights[j];
-        const m0 = prevStates[0].mean;
-        const m1 = prevStates[1].mean;
+        const m0 = prev0.mean;
+        const m1 = prev1.mean;
         const mixedMean = [
           [w[0] * m0[0][0] + w[1] * m1[0][0]],
           [w[0] * m0[1][0] + w[1] * m1[1][0]],
@@ -126,8 +179,8 @@ class IMMFilter {
           [0, 0],
         ];
         for (let i = 0; i < 2; i++) {
-          const mi = prevStates[i].mean;
-          const Pi_cov = prevStates[i].covariance;
+          const mi = prevPair[i].mean;
+          const Pi_cov = prevPair[i].covariance;
           const d0 = mi[0][0] - mixedMean[0][0];
           const d1 = mi[1][0] - mixedMean[1][0];
 
@@ -137,8 +190,14 @@ class IMMFilter {
           mixedCov[1][1] += w[i] * (Pi_cov[1][1] + d1 * d1);
         }
 
-        // Enforce exact symmetry against floating-point drift
-        const symOff = 0.5 * (mixedCov[0][1] + mixedCov[1][0]);
+        // Enforce symmetry, Cauchy-Schwarz, and avoid subnormal (< 1e-150) underflow in p * p
+        mixedCov[0][0] = mixedCov[0][0] >= 1e-150 ? mixedCov[0][0] : 0;
+        mixedCov[1][1] = mixedCov[1][1] >= 1e-150 ? mixedCov[1][1] : 0;
+        const maxOff = Math.sqrt(mixedCov[0][0] * mixedCov[1][1]);
+        let symOff = 0.5 * (mixedCov[0][1] + mixedCov[1][0]);
+        if (Math.abs(symOff) > maxOff) {
+          symOff = symOff < 0 ? -maxOff : maxOff;
+        }
         mixedCov[0][1] = symOff;
         mixedCov[1][0] = symOff;
 
@@ -214,4 +273,7 @@ class IMMFilter {
 module.exports = {
   IMMFilter,
   DEFAULT_PI,
+  DEFAULT_TAU_SLOW,
+  DEFAULT_TAU_FAST,
+  transitionMatrix,
 };

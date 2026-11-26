@@ -4,10 +4,35 @@
     color: "#a6bbcf",
     defaults: {
       name: { value: "" },
-      cutoff: { value: 85 },
-      chargerEfficiency: { value: 0.72 },
-      peakCharge: { value: 80 },
-      pwrStdev: { value: 0.15 },
+      cutoff: {
+        value: 85,
+        validate: function (v) {
+          const n = Number(v);
+          const p = Number(this.peakCharge ?? 80);
+          return Number.isFinite(n) && n > p && n <= 100;
+        },
+      },
+      chargerEfficiency: {
+        value: 0.72,
+        validate: function (v) {
+          const n = Number(v);
+          return Number.isFinite(n) && n > 0 && n <= 1;
+        },
+      },
+      peakCharge: {
+        value: 80,
+        validate: function (v) {
+          const n = Number(v);
+          return Number.isFinite(n) && n >= 0 && n < 100;
+        },
+      },
+      pwrStdev: {
+        value: 0.15,
+        validate: function (v) {
+          const n = Number(v);
+          return Number.isFinite(n) && n > 0;
+        },
+      },
     },
     inputs: 1,
     outputs: 3,

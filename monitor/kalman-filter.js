@@ -161,7 +161,7 @@ class KalmanFilter {
    * @param {number} [noiseFactor=1] - Noise factor
    */
   predict(ts, noiseFactor = 1) {
-    if (!this.kf) throw new Error("No KF instance");
+    if (!this.kf || !this.previousCorrected) throw new Error("No KF instance");
     if (!Number.isFinite(ts) || !Number.isFinite(noiseFactor)) {
       throw new TypeError("ts and noiseFactor must be finite numbers");
     }
@@ -213,7 +213,7 @@ class KalmanFilter {
 
     const log2Pi = Math.log(2 * Math.PI);
     const sVal = S[0][0];
-    const S_inv = Number.isFinite(sVal) && sVal > Number.MIN_VALUE ? invert(S) : null;
+    const S_inv = Number.isFinite(sVal) && sVal > 1e-150 ? invert(S) : null;
 
     let corrected;
     if (!S_inv) {
@@ -248,6 +248,24 @@ class KalmanFilter {
       corrected = this.kf.correct({
         predicted: this.state,
         observation: [value],
+      });
+
+      // Enforce symmetry, Cauchy-Schwarz, and avoid subnormal (< 1e-150) underflow in p * p
+      const cov = corrected.covariance;
+      const p00 = cov[0][0] >= 1e-150 ? cov[0][0] : 0;
+      const p11 = cov[1][1] >= 1e-150 ? cov[1][1] : 0;
+      const maxOff = Math.sqrt(p00 * p11);
+      let off = 0.5 * (cov[0][1] + cov[1][0]);
+      if (Math.abs(off) > maxOff) {
+        off = off < 0 ? -maxOff : maxOff;
+      }
+      corrected = new StateType({
+        mean: corrected.mean,
+        covariance: [
+          [p00, off],
+          [off, p11],
+        ],
+        index: corrected.index,
       });
     }
 
