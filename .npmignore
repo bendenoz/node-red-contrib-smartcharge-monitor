@@ -6,3 +6,6 @@ local/
 out/
 *.test.js
 *.spec.js
+.github/
+.babelrc
+jsconfig.json

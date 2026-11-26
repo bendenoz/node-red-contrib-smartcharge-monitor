@@ -1,68 +1,110 @@
 <script type="text/javascript">
-  RED.nodes.registerType("smartcharge-monitor", {
-    category: "function",
-    color: "#a6bbcf",
-    defaults: {
-      name: { value: "" },
-      cutoff: {
-        value: 85,
-        validate: function (v) {
-          const n = Number(v);
-          const rawPeak = $("#node-input-peakCharge").length
-            ? $("#node-input-peakCharge").val()
-            : this.peakCharge;
-          const p = Number(rawPeak !== undefined && rawPeak !== "" ? rawPeak : 80);
-          return Number.isFinite(n) && Number.isFinite(p) && n > p && n <= 100;
+  (function () {
+    function parseNum(raw) {
+      if (
+        typeof raw !== "number" &&
+        (typeof raw !== "string" || raw.trim() === "")
+      ) {
+        return NaN;
+      }
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : NaN;
+    }
+
+    RED.nodes.registerType("smartcharge-monitor", {
+      category: "function",
+      color: "#a6bbcf",
+      defaults: {
+        name: { value: "" },
+        cutoff: {
+          value: 85,
+          validate: function (v) {
+            const n = parseNum(v);
+            const rawPeak = $("#node-input-peakCharge").length
+              ? $("#node-input-peakCharge").val()
+              : this && this.peakCharge;
+            const parsedPeak = parseNum(rawPeak);
+            const p =
+              Number.isFinite(parsedPeak) && parsedPeak >= 0 && parsedPeak < 100
+                ? parsedPeak
+                : 80;
+            return Number.isFinite(n) && n > p && n <= 100;
+          },
+        },
+        chargerEfficiency: {
+          value: 0.72,
+          validate: function (v) {
+            const n = parseNum(v);
+            return Number.isFinite(n) && n > 0 && n <= 1;
+          },
+        },
+        peakCharge: {
+          value: 80,
+          validate: function (v) {
+            const n = parseNum(v);
+            const rawCutoff = $("#node-input-cutoff").length
+              ? $("#node-input-cutoff").val()
+              : this && this.cutoff;
+            const c = parseNum(rawCutoff);
+            return (
+              Number.isFinite(n) &&
+              n >= 0 &&
+              n < 100 &&
+              (!Number.isFinite(c) || c > 100 || n < c)
+            );
+          },
+        },
+        pwrStdev: {
+          value: 0.15,
+          validate: function (v) {
+            const n = parseNum(v);
+            return Number.isFinite(n) && n > 0;
+          },
         },
       },
-      chargerEfficiency: {
-        value: 0.72,
-        validate: function (v) {
-          const n = Number(v);
-          return Number.isFinite(n) && n > 0 && n <= 1;
-        },
+      inputs: 1,
+      outputs: 3,
+      outputLabels: [
+        "Charge power, in Watt",
+        "Charge power rate of change, in Watt per hour",
+        "OFF trigger",
+      ],
+      icon: "function.svg",
+      label: function () {
+        return this.name || "smartcharge-monitor";
       },
-      peakCharge: {
-        value: 80,
-        validate: function (v) {
-          const n = Number(v);
-          const rawCutoff = $("#node-input-cutoff").length
-            ? $("#node-input-cutoff").val()
-            : this.cutoff;
-          const c = Number(rawCutoff !== undefined && rawCutoff !== "" ? rawCutoff : 85);
-          return Number.isFinite(n) && n >= 0 && n < 100 && (!Number.isFinite(c) || n < c);
-        },
+      oneditprepare: function () {
+        $("#btn-smartcharge-toggle-advanced-settings").on("click", function () {
+          $("#smartcharge-advanced-settings").toggle();
+          if ($("#smartcharge-advanced-settings").is(":visible")) {
+            $(this).text("Hide Advanced Settings");
+          } else {
+            $(this).text("Show Advanced Settings");
+          }
+        });
+
+        let syncingFields = false;
+        $("#node-input-cutoff").on("change input", function () {
+          if (syncingFields) return;
+          syncingFields = true;
+          try {
+            $("#node-input-peakCharge").trigger("change");
+          } finally {
+            syncingFields = false;
+          }
+        });
+        $("#node-input-peakCharge").on("change input", function () {
+          if (syncingFields) return;
+          syncingFields = true;
+          try {
+            $("#node-input-cutoff").trigger("change");
+          } finally {
+            syncingFields = false;
+          }
+        });
       },
-      pwrStdev: {
-        value: 0.15,
-        validate: function (v) {
-          const n = Number(v);
-          return Number.isFinite(n) && n > 0;
-        },
-      },
-    },
-    inputs: 1,
-    outputs: 3,
-    outputLabels: [
-      "Charge power, in Watt",
-      "Charge power rate of change, in Watt per hour",
-      "OFF trigger",
-    ],
-    icon: "function.svg",
-    label: function () {
-      return this.name || "smartcharge-monitor";
-    },
-    oneditprepare: function () {
-      $("#btn-smartcharge-toggle-advanced-settings").on("click", function () {
-        $("#smartcharge-advanced-settings").toggle();
-        if ($("#smartcharge-advanced-settings").is(":visible")) {
-          $(this).text("Hide Advanced Settings");
-        } else {
-          $(this).text("Show Advanced Settings");
-        }
-      });
-    },
-  });
+    });
+  })();
 </script>
 
 <script type="text/html" data-template-name="smartcharge-monitor">
@@ -103,6 +145,7 @@
       <a
         href="https://batteryuniversity.com/article/bu-409-charging-lithium-ion"
         target="_blank"
+        rel="noopener noreferrer"
         >Battery University Article</a
       >
     </div>
@@ -163,6 +206,7 @@
     <a
       href="https://batteryuniversity.com/article/bu-409-charging-lithium-ion"
       target="_blank"
+      rel="noopener noreferrer"
       >Battery University</a
     >.
   </p>

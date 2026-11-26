@@ -33,9 +33,9 @@
   },
   "license": "MIT",
   "scripts": {
-    "build": "babel monitor -d dist/monitor/ --ignore monitor/monitor.test.js,monitor/kalman-filter.test.js,monitor/imm-filter.test.js && node -e \"require('fs').copyFileSync('monitor/monitor.html', 'dist/monitor/monitor.html')\"",
-    "prepack": "yarn build",
-    "prepublishOnly": "yarn test && yarn build",
+    "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && babel monitor -d dist/monitor/ --ignore \"**/*.test.js,**/*.spec.js\" && node -e \"require('fs').copyFileSync('monitor/monitor.html', 'dist/monitor/monitor.html')\"",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm test && npm run build",
     "test": "jest"
   }
 }
