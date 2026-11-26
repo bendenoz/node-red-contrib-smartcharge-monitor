@@ -12,8 +12,10 @@ export type Props = {
   imm: IMMFilter;
   /** last push timestamp */
   lastPush: number;
-  /** in h^-1 ⋅ min, aka normalized time for a k of 1 h^-1 */
-  triggerCusum: number;
+  /** Local plateau peak for current segment (W) */
+  localPeak: number;
+  /** Whether zK > 0 was entered during current segment */
+  inDecay: boolean;
   /** Total Ws */
   energy: number;
   /** Peak detected power while not in decay */

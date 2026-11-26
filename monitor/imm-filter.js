@@ -268,6 +268,44 @@ class IMMFilter {
       this.mu[0] * kSlow + this.mu[1] * kFast,
     ];
   }
+
+  /**
+   * Posterior mixture standard deviation of decay rate k (in s^-1)
+   * @return {number | null}
+   */
+  kStd() {
+    const [, kMean] = this.mean();
+    const sSlow = this.kfSlow.state;
+    const sFast = this.kfFast.state;
+    if (kMean === null || !sSlow || !sFast) return null;
+
+    const dSlow = sSlow.mean[1][0] - kMean;
+    const dFast = sFast.mean[1][0] - kMean;
+    const varK =
+      this.mu[0] * (sSlow.covariance[1][1] + dSlow * dSlow) +
+      this.mu[1] * (sFast.covariance[1][1] + dFast * dFast);
+    return Math.sqrt(Math.max(0, varK));
+  }
+
+  /**
+   * One-sided Wald z-score testing active decay (k > wPerHour / 3600)
+   * @param {number} wPerHour - Minimum decay threshold in h^-1
+   * @return {number}
+   */
+  kZScore(wPerHour) {
+    const [, kMean] = this.mean();
+    const stdK = this.kStd();
+    if (kMean === null || stdK === null || !Number.isFinite(wPerHour)) {
+      return 0;
+    }
+    const wPerSec = wPerHour / 3600;
+    if (stdK <= 0) {
+      if (kMean > wPerSec) return Number.POSITIVE_INFINITY;
+      if (kMean < wPerSec) return Number.NEGATIVE_INFINITY;
+      return 0;
+    }
+    return (kMean - wPerSec) / stdK;
+  }
 }
 
 module.exports = {

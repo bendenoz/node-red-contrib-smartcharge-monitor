@@ -303,4 +303,44 @@ describe("IMMFilter", () => {
       () => new IMMFilter({ stdK: 0.77e-7, pwrStdev: 0.15, tauSlow: 0 })
     ).toThrow(TypeError);
   });
+
+  it("computes mixture posterior kStd() (including spread-of-means) and kZScore()", () => {
+    const imm = new IMMFilter({ stdK: 0.77e-7, pwrStdev: 0.15 });
+    expect(imm.kStd()).toBeNull();
+    expect(imm.kZScore(1 / 6.66)).toBe(0);
+
+    imm.init(50, 0);
+    imm.mu = [0.7, 0.3];
+    if (!imm.kfSlow.state || !imm.kfFast.state) {
+      throw new Error("Expected states after init");
+    }
+    imm.kfSlow.state.mean = [[50], [2e-4]];
+    imm.kfFast.state.mean = [[50], [6e-4]];
+    imm.kfSlow.state.covariance = [
+      [0.1, 0],
+      [0, 1e-10],
+    ];
+    imm.kfFast.state.covariance = [
+      [0.1, 0],
+      [0, 4e-10],
+    ];
+
+    const kMean = 0.7 * 2e-4 + 0.3 * 6e-4;
+    const expectedVar =
+      0.7 * (1e-10 + (2e-4 - kMean) ** 2) + 0.3 * (4e-10 + (6e-4 - kMean) ** 2);
+    const expectedStd = Math.sqrt(expectedVar);
+
+    expect(imm.kStd()).toBeCloseTo(expectedStd, 12);
+    expect(imm.kZScore(1 / 6.66)).toBeCloseTo(
+      (kMean - 1 / 6.66 / 3600) / expectedStd,
+      10
+    );
+
+    // Zero variance boundary handling
+    imm.mu = [1, 0];
+    imm.kfSlow.state.covariance[1][1] = 0;
+    imm.kfSlow.state.mean[1][0] = 2e-4;
+    expect(imm.kZScore(0)).toBe(Number.POSITIVE_INFINITY);
+    expect(imm.kZScore(10)).toBe(Number.NEGATIVE_INFINITY);
+  });
 });

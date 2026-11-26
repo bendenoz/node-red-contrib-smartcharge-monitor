@@ -416,7 +416,7 @@ describe("Monitor Node", () => {
     expect(offCalls).toHaveLength(0);
   });
 
-  it("should accumulate CUSUM without wiping on a single noisy sample", () => {
+  it("should keep yellow active-decay status across a single noisy sample", () => {
     nodeInit(RED);
     const Monitor = RED.nodes.registerType.mock.calls[0][1];
     Monitor.call(node, { cutoff: 82 });
@@ -428,7 +428,7 @@ describe("Monitor Node", () => {
       node.inputCallback({ payload: 50 }, send, done);
     }
 
-    // Decay until yellow status (hasDecay: triggerCusum > w) appears
+    // Decay until yellow status (waldYellowZ) appears
     const kTrue = 2.0 / 3600;
     let sawYellow = false;
     for (let i = 1; i <= 10; i++) {
@@ -448,10 +448,10 @@ describe("Monitor Node", () => {
     }
     expect(sawYellow).toBe(true);
 
-    // A single flat/noisy sample should not hard-reset triggerCusum to 0
+    // A single flat/noisy sample should not clear active-decay status
     t += 20000;
     jest.setSystemTime(new Date(startTime + t));
-    node.inputCallback({ payload: 47 }, send, done);
+    node.inputCallback({ payload: 49 }, send, done);
     const statusAfterNoise =
       node.status.mock.calls[node.status.mock.calls.length - 1][0];
     expect(statusAfterNoise.fill).toBe("yellow");
@@ -594,9 +594,82 @@ describe("Monitor Node", () => {
     expect(done).toHaveBeenCalled();
     expect(logs.some((l) => l.args[0] === "Start detected")).toBe(true);
     expect(offEvents).toHaveLength(1);
-    expect(offEvents[0].timeMin).toBeGreaterThan(20);
-    expect(offEvents[0].timeMin).toBeLessThan(96);
+    expect(offEvents[0].timeMin).toBeGreaterThan(60);
+    expect(offEvents[0].timeMin).toBeLessThan(72);
     expect(triggerInfo).not.toBeNull();
     expect(triggerInfo.powerW).toBeLessThan(triggerInfo.maxPwrW);
+  });
+
+  it("should re-anchor localPeak on multi-stage USB-PD step-downs and show OFF sent status", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 85 });
+
+    let t = 0;
+    // Stage 1: 65 W for 15 minutes
+    for (let i = 0; i < 45; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 65 }, send, done);
+    }
+    // Stage 2: -50% PD step-down to 32 W flat for 15 minutes (below 65 * 0.775)
+    for (let i = 0; i < 45; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 32 }, send, done);
+    }
+    // Stage 3: genuine CV taper from 32 W -> should wait for ~24.8 W (32 * 0.775), not fire at 30 W
+    const kTrue = 1.5 / 3600;
+    for (let i = 1; i <= 40; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 32 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      jest.advanceTimersByTime(2500);
+    }
+
+    const offCalls = send.mock.calls.filter(
+      ([msgs]) => msgs[2] && msgs[2].payload === false
+    );
+    expect(offCalls).toHaveLength(1);
+
+    const schedLog = node.log.mock.calls.find(
+      ([msg]) => typeof msg === "string" && msg.startsWith("Scheduling one time OFF")
+    );
+    expect(schedLog).toBeDefined();
+    const match = schedLog[0].match(/OFF,\s*([\d.]+)\s*\/\s*([\d.]+)\s*W/);
+    expect(match).not.toBeNull();
+    expect(parseFloat(match[1])).toBeLessThanOrEqual(25.5);
+
+    const statusTexts = node.status.mock.calls.map(([s]) => s.text);
+    expect(statusTexts.some((txt) => txt.includes("OFF sent"))).toBe(true);
+
+    node.closeCallback();
+  });
+
+  it("should preserve interval energy across Mahalanobis step resets", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 85, chargerEfficiency: 1 });
+
+    // Steady 60 W at 20 s cadence for 580 s, then step jump to 100 W at 600 s (10 min = 10.0 Wh)
+    for (let i = 0; i < 30; i++) {
+      jest.setSystemTime(new Date(startTime + i * 20000));
+      node.inputCallback({ payload: 60 }, send, done);
+    }
+    jest.setSystemTime(new Date(startTime + 600000));
+    node.inputCallback({ payload: 100 }, send, done);
+
+    // Must preserve the 580s -> 600s slice (10.0 Wh total, not 9.7 Wh) and trigger reInit (100 W exact)
+    const lastMsgs = send.mock.calls[send.mock.calls.length - 1][0];
+    expect(lastMsgs[0].payload).toBe(100);
+    const lastStatus =
+      node.status.mock.calls[node.status.mock.calls.length - 1][0];
+    expect(lastStatus.text).toContain("total 10.0 Wh");
+
+    node.closeCallback();
   });
 });
