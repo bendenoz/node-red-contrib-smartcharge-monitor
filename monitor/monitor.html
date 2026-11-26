@@ -1,61 +1,110 @@
 <script type="text/javascript">
-  RED.nodes.registerType("smartcharge-monitor", {
-    category: "function",
-    color: "#a6bbcf",
-    defaults: {
-      name: { value: "" },
-      cutoff: {
-        value: 85,
-        validate: function (v) {
-          const n = Number(v);
-          const p = Number(this.peakCharge ?? 80);
-          return Number.isFinite(n) && n > p && n <= 100;
+  (function () {
+    function parseNum(raw) {
+      if (
+        typeof raw !== "number" &&
+        (typeof raw !== "string" || raw.trim() === "")
+      ) {
+        return NaN;
+      }
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : NaN;
+    }
+
+    RED.nodes.registerType("smartcharge-monitor", {
+      category: "function",
+      color: "#a6bbcf",
+      defaults: {
+        name: { value: "" },
+        cutoff: {
+          value: 85,
+          validate: function (v) {
+            const n = parseNum(v);
+            const rawPeak = $("#node-input-peakCharge").length
+              ? $("#node-input-peakCharge").val()
+              : this && this.peakCharge;
+            const parsedPeak = parseNum(rawPeak);
+            const p =
+              Number.isFinite(parsedPeak) && parsedPeak >= 0 && parsedPeak < 100
+                ? parsedPeak
+                : 80;
+            return Number.isFinite(n) && n > p && n <= 100;
+          },
+        },
+        chargerEfficiency: {
+          value: 0.72,
+          validate: function (v) {
+            const n = parseNum(v);
+            return Number.isFinite(n) && n > 0 && n <= 1;
+          },
+        },
+        peakCharge: {
+          value: 80,
+          validate: function (v) {
+            const n = parseNum(v);
+            const rawCutoff = $("#node-input-cutoff").length
+              ? $("#node-input-cutoff").val()
+              : this && this.cutoff;
+            const c = parseNum(rawCutoff);
+            return (
+              Number.isFinite(n) &&
+              n >= 0 &&
+              n < 100 &&
+              (!Number.isFinite(c) || c > 100 || n < c)
+            );
+          },
+        },
+        pwrStdev: {
+          value: 0.15,
+          validate: function (v) {
+            const n = parseNum(v);
+            return Number.isFinite(n) && n > 0;
+          },
         },
       },
-      chargerEfficiency: {
-        value: 0.72,
-        validate: function (v) {
-          const n = Number(v);
-          return Number.isFinite(n) && n > 0 && n <= 1;
-        },
+      inputs: 1,
+      outputs: 3,
+      outputLabels: [
+        "Charge power, in Watt",
+        "Charge power rate of change, in Watt per hour",
+        "OFF trigger",
+      ],
+      icon: "function.svg",
+      label: function () {
+        return this.name || "smartcharge-monitor";
       },
-      peakCharge: {
-        value: 80,
-        validate: function (v) {
-          const n = Number(v);
-          return Number.isFinite(n) && n >= 0 && n < 100;
-        },
+      oneditprepare: function () {
+        $("#btn-smartcharge-toggle-advanced-settings").on("click", function () {
+          $("#smartcharge-advanced-settings").toggle();
+          if ($("#smartcharge-advanced-settings").is(":visible")) {
+            $(this).text("Hide Advanced Settings");
+          } else {
+            $(this).text("Show Advanced Settings");
+          }
+        });
+
+        let syncingFields = false;
+        $("#node-input-cutoff").on("change input", function () {
+          if (syncingFields) return;
+          syncingFields = true;
+          try {
+            $("#node-input-peakCharge").trigger("change");
+          } finally {
+            syncingFields = false;
+          }
+        });
+        $("#node-input-peakCharge").on("change input", function () {
+          if (syncingFields) return;
+          syncingFields = true;
+          try {
+            $("#node-input-cutoff").trigger("change");
+          } finally {
+            syncingFields = false;
+          }
+        });
       },
-      pwrStdev: {
-        value: 0.15,
-        validate: function (v) {
-          const n = Number(v);
-          return Number.isFinite(n) && n > 0;
-        },
-      },
-    },
-    inputs: 1,
-    outputs: 3,
-    outputLabels: [
-      "Charge power, in Watt",
-      "Charge acceleration, in Watt per hour",
-      "OFF trigger",
-    ],
-    icon: "function.svg",
-    label: function () {
-      return this.name || "smartcharge-monitor";
-    },
-    oneditprepare: function () {
-      $("#btn-smartcharge-toggle-advanced-settings").on("click", function () {
-        $("#smartcharge-advanced-settings").toggle();
-        if ($("#smartcharge-advanced-settings").is(":visible")) {
-          $(this).text("Hide Advanced Settings");
-        } else {
-          $(this).text("Show Advanced Settings");
-        }
-      });
-    },
-  });
+    });
+  })();
 </script>
 
 <script type="text/html" data-template-name="smartcharge-monitor">
@@ -87,14 +136,16 @@
       <input type="text" id="node-input-peakCharge" />
     </div>
     <div class="form-row">
-      <label for="node-input-pwrStdev">Power Uncertainty</label>
+      <label for="node-input-pwrStdev">Power Uncertainty (W)</label>
       <input type="text" id="node-input-pwrStdev" />
     </div>
     <div class="form-row">
-      For more details about peak charge see
+      Default <code>0.15 W</code> suits <code>2–100 W</code> smart plugs; increase for high-wattage loads with coarse reporting jitter.
+      For peak charge details see
       <a
         href="https://batteryuniversity.com/article/bu-409-charging-lithium-ion"
         target="_blank"
+        rel="noopener noreferrer"
         >Battery University Article</a
       >
     </div>
@@ -123,10 +174,10 @@
       </dl>
     </li>
     <li>
-      Charge acceleration
+      Charge power rate of change
       <dl class="message-properties">
         <dt>payload <span class="property-type">number</span></dt>
-        <dd>The rate of change of the charging power, in Watts per hour.</dd>
+        <dd>The rate of change of the charging power, in Watts per hour (W/h).</dd>
       </dl>
     </li>
     <li>
@@ -134,7 +185,7 @@
       <dl class="message-properties">
         <dt>payload <span class="property-type">boolean</span></dt>
         <dd>
-          Message sent when charging should be turned off. Always `false`.
+          Message sent when charging should be turned off. Always <code>false</code>.
         </dd>
       </dl>
     </li>
@@ -142,12 +193,11 @@
 
   <h3>Details</h3>
   <p>
-    The <code>smartcharge-monitor</code> node uses a Kalman filter to refine
-    power consumption data and accurately detect the characteristic time
-    constant of the exponential decay phase. When this time constant is within a
-    valid range (typically around 1 hour), the node then waits for the power
-    level to drop below the specified threshold before stopping the charging
-    process.
+    The <code>smartcharge-monitor</code> node uses a 2-mode Interacting Multiple
+    Model (IMM) Kalman filter to estimate charging power and exponential decay
+    rate across changing load phases. Once statistically significant decay is
+    confirmed and power drops below the target threshold, it emits a single-shot
+    OFF trigger.
   </p>
 
   <h3>References</h3>
@@ -156,6 +206,7 @@
     <a
       href="https://batteryuniversity.com/article/bu-409-charging-lithium-ion"
       target="_blank"
+      rel="noopener noreferrer"
       >Battery University</a
     >.
   </p>
