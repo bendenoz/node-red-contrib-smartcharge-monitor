@@ -644,8 +644,119 @@ describe("Monitor Node", () => {
     expect(match).not.toBeNull();
     expect(parseFloat(match[1])).toBeLessThanOrEqual(25.5);
 
-    const statusTexts = node.status.mock.calls.map(([s]) => s.text);
-    expect(statusTexts.some((txt) => txt.includes("OFF sent"))).toBe(true);
+    const offStatuses = node.status.mock.calls
+      .map(([s]) => s)
+      .filter((s) => s.text && s.text.includes("OFF sent"));
+    expect(offStatuses.length).toBeGreaterThan(0);
+    expect(offStatuses[0].fill).toBe("blue");
+    expect(offStatuses[0].shape).toBe("dot");
+
+    node.closeCallback();
+  });
+
+  it("should ignore a 1-sample glitch under tight cutoff", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 82 });
+
+    let t = 0;
+    for (let i = 0; i < 20; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 50 }, send, done);
+    }
+    // Single 1-sample glitch (50 -> 44 W: < 20% MAHA reset, > 9% drop at cutoff=82) then recovery
+    t += 20000;
+    jest.setSystemTime(new Date(startTime + t));
+    node.inputCallback({ payload: 44 }, send, done);
+    jest.advanceTimersByTime(6000);
+    t += 20000;
+    jest.setSystemTime(new Date(startTime + t));
+    node.inputCallback({ payload: 50 }, send, done);
+
+    expect(
+      send.mock.calls.filter(([m]) => m[2] && m[2].payload === false)
+    ).toHaveLength(0);
+
+    node.closeCallback();
+  });
+
+  it("should re-anchor localPeak after a sub-MAHA step-down settles without triggering prematurely", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 85 });
+
+    let t = 0;
+    for (let i = 0; i < 20; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 50 }, send, done);
+    }
+    // Sub-MAHA -14% step-down (50 -> 43 W, > 38.75 W threshold) flat for 20 min so localPeak re-anchors
+    for (let i = 0; i < 60; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 43 }, send, done);
+    }
+    // Genuine CV taper from 43 W must cross 43 * 0.775 (~33.3 W), not fire early against 50 W
+    const kTrue = 2.0 / 3600;
+    for (let i = 1; i <= 30; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 43 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      jest.advanceTimersByTime(2500);
+    }
+    const offCalls = send.mock.calls.filter(([m]) => m[2] && m[2].payload === false);
+    expect(offCalls).toHaveLength(1);
+    const schedLog = node.log.mock.calls.find(
+      ([msg]) => typeof msg === "string" && msg.startsWith("Scheduling one time OFF")
+    );
+    expect(schedLog).toBeDefined();
+    const m = schedLog[0].match(/OFF,\s*([\d.]+)/);
+    expect(parseFloat(m[1])).toBeLessThanOrEqual(33.5);
+
+    node.closeCallback();
+  });
+
+  it("should not integrate phantom energy on late Stop after OFF sent", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 82, chargerEfficiency: 1 });
+
+    let t = 0;
+    for (let i = 0; i < 15; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 50 }, send, done);
+    }
+    const kTrue = 2.5 / 3600;
+    for (let i = 1; i <= 25; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 50 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      jest.advanceTimersByTime(2500);
+      if (send.mock.calls.some(([m]) => m[2] && m[2].payload === false)) break;
+    }
+    const statusAtOff =
+      node.status.mock.calls[node.status.mock.calls.length - 1][0];
+    const whAtOff = parseFloat(statusAtOff.text.match(/([\d.]+)\s*Wh/)[1]);
+
+    // 1 hour later, plug finally reports 0 W -> should NOT add 1h * 45W phantom energy
+    t += 3600000;
+    jest.setSystemTime(new Date(startTime + t));
+    node.inputCallback({ payload: 0 }, send, done);
+    const statusAtStop =
+      node.status.mock.calls[node.status.mock.calls.length - 1][0];
+    const whAtStop = parseFloat(statusAtStop.text.match(/([\d.]+)\s*Wh/)[1]);
+    expect(whAtStop).toBeCloseTo(whAtOff, 1);
 
     node.closeCallback();
   });

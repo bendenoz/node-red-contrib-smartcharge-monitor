@@ -4,11 +4,17 @@ const { IMMFilter } = require("./imm-filter");
 
 const stdK = 0.77e-7;
 
-/** cusum mini k value / minimum active decay rate (in hours^-1) */
+/** minimum active decay rate (in hours^-1) */
 const w = 1 / 6.66;
 
 /** one-sided Wald z-score threshold for triggering OFF (~99.87% confidence k > w) */
 const waldTriggerZ = 3;
+
+/** consecutive corrected samples with kZ >= waldTriggerZ required to confirm decay */
+const minWaldConfirmSamples = 2;
+
+/** consecutive corrected samples with kZ <= 0 required to re-anchor localPeak after decay */
+const minFlatSamples = 3;
 
 /** one-sided Wald z-score threshold for highlighting active decay in node status */
 const waldYellowZ = 1.5;
@@ -89,6 +95,8 @@ const nodeInit = (RED) => {
         lastPush: now,
         localPeak: 0,
         inDecay: false,
+        waldStreak: 0,
+        flatStreak: 0,
         energy: 0,
         maxPwr: 0,
         timeout: null,
@@ -120,14 +128,17 @@ const nodeInit = (RED) => {
 
       if (
         kZ >= waldTriggerZ &&
-        k * 3600 > w && // must still be actively decaying at trigger time
+        props.waldStreak >= minWaldConfirmSamples &&
         props.maxPwr &&
         val <= props.maxPwr * powerRatio &&
         (!props.localPeak || val <= props.localPeak * powerRatio)
       ) {
+        const refPwr = props.localPeak
+          ? Math.min(props.maxPwr, props.localPeak)
+          : props.maxPwr;
         node.log("Triggered");
         node.log(
-          `Scheduling one time OFF, ${val.toFixed(1)} / ${props.maxPwr.toFixed(
+          `Scheduling one time OFF, ${val.toFixed(1)} / ${refPwr.toFixed(
             1
           )} W, k=${(k * 3600).toFixed(2)}`
         );
@@ -173,16 +184,10 @@ const nodeInit = (RED) => {
       const accel = k * 3600 * (0 - val) || 0;
 
       const kZ = props.imm.kZScore(w);
-      const hasDecay = kZ >= waldYellowZ && k * 3600 > w;
+      const hasDecay = kZ >= waldYellowZ;
       // Retain peak power observed while not in decay
       if (k * 3600 < w) props.maxPwr = Math.max(props.maxPwr, val);
-      // Track segment plateau peak; re-anchor if returning from an aborted decay excursion
-      if (kZ <= 0) {
-        props.localPeak = props.inDecay ? val : Math.max(props.localPeak, val);
-        props.inDecay = false;
-      } else {
-        props.inDecay = true;
-      }
+      if (!props.inDecay) props.localPeak = Math.max(props.localPeak, val);
 
       if (val < 0.05) {
         node.status({
@@ -289,6 +294,8 @@ const nodeInit = (RED) => {
           props.lastPush = now;
           props.localPeak = pv;
           props.inDecay = false;
+          props.waldStreak = 0;
+          props.flatStreak = 0;
           pushOut(now, nodeSend);
           if (pv !== 0 && !props.offSent) scheduleUpdate(nodeSend);
           if (done) done();
@@ -309,9 +316,10 @@ const nodeInit = (RED) => {
             reInit(0);
           } else {
             node.log("Stop detected");
+            const wasOffSent = props.offSent;
             props.maxPwr = 0;
             props.offSent = false;
-            reInit(prevVal ?? 0);
+            reInit(wasOffSent ? 0 : (prevVal ?? 0));
           }
           return;
         }
@@ -325,6 +333,22 @@ const nodeInit = (RED) => {
           // reset !
           reInit(prevVal ?? 0);
           return;
+        }
+
+        // Update measurement-only confirmation & plateau hysteresis counters
+        const [curVal] = getFused();
+        const kZ = props.imm.kZScore(w);
+        props.waldStreak = kZ >= waldTriggerZ ? props.waldStreak + 1 : 0;
+        if (kZ > 0) {
+          props.inDecay = true;
+          props.flatStreak = 0;
+        } else {
+          props.flatStreak += 1;
+          if (props.inDecay && props.flatStreak >= minFlatSamples && curVal !== null) {
+            props.localPeak = curVal;
+            props.inDecay = false;
+            props.flatStreak = 0;
+          }
         }
 
         pushOut(now, nodeSend);

@@ -295,7 +295,13 @@ class IMMFilter {
   kZScore(wPerHour) {
     const [, kMean] = this.mean();
     const stdK = this.kStd();
-    if (kMean === null || stdK === null || !Number.isFinite(wPerHour)) {
+    if (
+      kMean === null ||
+      stdK === null ||
+      !Number.isFinite(kMean) ||
+      !Number.isFinite(stdK) ||
+      !Number.isFinite(wPerHour)
+    ) {
       return 0;
     }
     const wPerSec = wPerHour / 3600;

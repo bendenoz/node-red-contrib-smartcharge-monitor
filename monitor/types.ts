@@ -14,8 +14,12 @@ export type Props = {
   lastPush: number;
   /** Local plateau peak for current segment (W) */
   localPeak: number;
-  /** Whether zK > 0 was entered during current segment */
+  /** Whether kZ > 0 was entered during current segment */
   inDecay: boolean;
+  /** Consecutive corrected samples with kZ >= waldTriggerZ */
+  waldStreak: number;
+  /** Consecutive corrected samples with kZ <= 0 after entering decay */
+  flatStreak: number;
   /** Total Ws */
   energy: number;
   /** Peak detected power while not in decay */
