@@ -298,8 +298,8 @@ describe("Monitor Node", () => {
     node.closeCallback();
   });
 
-  it("should process ninebot fixture data correctly", () => {
-    const dataPath = path.join(__dirname, "..", "fixtures", "data-ninebot.csv");
+  const replayFixture = (fixtureFile, monitorConfig) => {
+    const dataPath = path.join(__dirname, "..", "fixtures", fixtureFile);
     const csvData = fs.readFileSync(dataPath, "utf8");
     inputData = csvParse(csvData, {
       columns: true,
@@ -309,137 +309,116 @@ describe("Monitor Node", () => {
 
     nodeInit(RED);
     const Monitor = RED.nodes.registerType.mock.calls[0][1];
-    Monitor.call(node, { cutoff: 82 });
+    Monitor.call(node, monitorConfig);
 
-    node.log = jest.fn((...args) => [args, Date.now()]);
+    const logs = [];
+    node.log = jest.fn((...args) => {
+      logs.push({ timeMin: (Date.now() - startTime) / 60000, args });
+    });
 
-    inputData.forEach((data) => {
+    const offEvents = [];
+    const trackedSend = jest.fn((msgs) => {
+      if (Array.isArray(msgs) && msgs[2] && msgs[2].payload === false) {
+        offEvents.push({ timeMin: (Date.now() - startTime) / 60000 });
+      }
+      send(msgs);
+    });
+
+    inputData.forEach((data, idx) => {
       const timestamp = parseFloat(data.timestamp);
       const value = parseFloat(data.value);
 
       jest.setSystemTime(new Date(startTime + timestamp));
+      node.inputCallback({ payload: value }, trackedSend, done);
 
-      const msg = { payload: value };
-      node.inputCallback(msg, send, done);
-
-      jest.advanceTimersByTime(5500);
-      jest.advanceTimersByTime(5500);
-      jest.advanceTimersByTime(5500);
+      const nextTimestamp =
+        idx + 1 < inputData.length
+          ? parseFloat(inputData[idx + 1].timestamp)
+          : timestamp + 5500;
+      const gapMs = Math.max(0, Math.floor(nextTimestamp - timestamp) - 1);
+      if (gapMs > 0) {
+        jest.advanceTimersByTime(gapMs);
+      }
     });
 
+    node.closeCallback();
+
+    const schedLog = logs.find(
+      (l) => typeof l.args[0] === "string" && l.args[0].startsWith("Scheduling one time OFF")
+    );
+    let triggerInfo = null;
+    if (schedLog) {
+      const m = schedLog.args[0].match(/OFF,\s*([\d.]+)\s*\/\s*([\d.]+)\s*W,\s*k=([\d.-]+)/);
+      if (m) {
+        triggerInfo = {
+          powerW: parseFloat(m[1]),
+          maxPwrW: parseFloat(m[2]),
+          kPerHour: parseFloat(m[3]),
+        };
+      }
+    }
+
+    return { logs, offEvents, triggerInfo };
+  };
+
+  it("should process ninebot fixture data correctly", () => {
+    const { logs, offEvents, triggerInfo } = replayFixture("data-ninebot.csv", {
+      cutoff: 82,
+    });
     expect(send).toHaveBeenCalled();
     expect(done).toHaveBeenCalled();
-    expect(node.log).toHaveBeenCalled();
-
-    // Output the log calls to the console with system time of the actual call
-    console.log(
-      node.log.mock.results.map((result) => [
-        (result.value[1] - startTime) / 1000,
-        (result.value[1] - startTime) / 1000 / 60,
-        result.value[0],
-      ])
-    );
-
-    node.closeCallback();
+    expect(logs.some((l) => l.args[0] === "Start detected")).toBe(true);
+    expect(logs.some((l) => l.args[0] === "Stop detected")).toBe(true);
+    expect(offEvents).toHaveLength(1);
+    expect(offEvents[0].timeMin).toBeGreaterThan(95);
+    expect(offEvents[0].timeMin).toBeLessThan(101);
+    expect(triggerInfo).not.toBeNull();
+    expect(triggerInfo.powerW).toBeLessThan(triggerInfo.maxPwrW);
   });
 
   it("should process powerbank fixture data correctly", () => {
-    const dataPath = path.join(
-      __dirname,
-      "..",
-      "fixtures",
-      "data-noisy-powerbank.csv"
+    const { logs, offEvents, triggerInfo } = replayFixture(
+      "data-noisy-powerbank.csv",
+      { cutoff: 82 }
     );
-    const csvData = fs.readFileSync(dataPath, "utf8");
-    inputData = csvParse(csvData, {
-      columns: true,
-      skip_empty_lines: true,
-      cast: true,
-    });
-
-    nodeInit(RED);
-    const Monitor = RED.nodes.registerType.mock.calls[0][1];
-    Monitor.call(node, { cutoff: 82 });
-
-    node.log = jest.fn((...args) => [args, Date.now()]);
-
-    inputData.forEach((data) => {
-      const timestamp = parseFloat(data.timestamp);
-      const value = parseFloat(data.value);
-
-      jest.setSystemTime(new Date(startTime + timestamp));
-
-      const msg = { payload: value };
-      node.inputCallback(msg, send, done);
-
-      jest.advanceTimersByTime(5500);
-      jest.advanceTimersByTime(5500);
-      jest.advanceTimersByTime(5500);
-    });
-
     expect(send).toHaveBeenCalled();
     expect(done).toHaveBeenCalled();
-    expect(node.log).toHaveBeenCalled();
-
-    // Output the log calls to the console with system time of the actual call
-    console.log(
-      node.log.mock.results.map((result) => [
-        (result.value[1] - startTime) / 1000,
-        (result.value[1] - startTime) / 1000 / 60,
-        result.value[0],
-      ])
-    );
-
-    node.closeCallback();
+    expect(logs.some((l) => l.args[0] === "Start detected")).toBe(true);
+    expect(logs.some((l) => l.args[0] === "Stop detected")).toBe(true);
+    expect(offEvents).toHaveLength(1);
+    expect(offEvents[0].timeMin).toBeGreaterThan(310);
+    expect(offEvents[0].timeMin).toBeLessThan(330);
+    expect(triggerInfo).not.toBeNull();
+    expect(triggerInfo.powerW).toBeLessThan(triggerInfo.maxPwrW);
   });
 
   it("should process applewatch fixture data correctly", () => {
-    const dataPath = path.join(
-      __dirname,
-      "..",
-      "fixtures",
-      "data-apple-watch.csv"
+    const { logs, offEvents, triggerInfo } = replayFixture(
+      "data-apple-watch.csv",
+      { cutoff: 83 }
     );
-    const csvData = fs.readFileSync(dataPath, "utf8");
-    inputData = csvParse(csvData, {
-      columns: true,
-      skip_empty_lines: true,
-      cast: true,
-    });
-
-    nodeInit(RED);
-    const Monitor = RED.nodes.registerType.mock.calls[0][1];
-    Monitor.call(node, { cutoff: 83 });
-
-    node.log = jest.fn((...args) => [args, Date.now()]);
-
-    inputData.forEach((data) => {
-      const timestamp = parseFloat(data.timestamp);
-      const value = parseFloat(data.value);
-
-      jest.setSystemTime(new Date(startTime + timestamp));
-
-      const msg = { payload: value };
-      node.inputCallback(msg, send, done);
-
-      jest.advanceTimersByTime(5500);
-      jest.advanceTimersByTime(5500);
-      jest.advanceTimersByTime(5500);
-    });
-
     expect(send).toHaveBeenCalled();
     expect(done).toHaveBeenCalled();
-    expect(node.log).toHaveBeenCalled();
+    expect(logs.some((l) => l.args[0] === "Start detected")).toBe(true);
+    expect(offEvents).toHaveLength(1);
+    expect(offEvents[0].timeMin).toBeGreaterThan(20);
+    expect(offEvents[0].timeMin).toBeLessThan(112);
+    expect(triggerInfo).not.toBeNull();
+    expect(triggerInfo.powerW).toBeLessThan(triggerInfo.maxPwrW);
+  });
 
-    // Output the log calls to the console with system time of the actual call
-    console.log(
-      node.log.mock.results.map((result) => [
-        (result.value[1] - startTime) / 1000,
-        (result.value[1] - startTime) / 1000 / 60,
-        result.value[0],
-      ])
+  it("should process samsungwatch fixture data correctly", () => {
+    const { logs, offEvents, triggerInfo } = replayFixture(
+      "data-samsung-watch.csv",
+      { cutoff: 83 }
     );
-
-    node.closeCallback();
+    expect(send).toHaveBeenCalled();
+    expect(done).toHaveBeenCalled();
+    expect(logs.some((l) => l.args[0] === "Start detected")).toBe(true);
+    expect(offEvents).toHaveLength(1);
+    expect(offEvents[0].timeMin).toBeGreaterThan(20);
+    expect(offEvents[0].timeMin).toBeLessThan(96);
+    expect(triggerInfo).not.toBeNull();
+    expect(triggerInfo.powerW).toBeLessThan(triggerInfo.maxPwrW);
   });
 });
