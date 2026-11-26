@@ -213,7 +213,7 @@ class KalmanFilter {
 
     const log2Pi = Math.log(2 * Math.PI);
     const sVal = S[0][0];
-    const S_inv = Number.isFinite(sVal) && sVal > Number.MIN_VALUE ? invert(S) : null;
+    const S_inv = Number.isFinite(sVal) && sVal > 1e-150 ? invert(S) : null;
 
     let corrected;
     if (!S_inv) {
@@ -250,10 +250,10 @@ class KalmanFilter {
         observation: [value],
       });
 
-      // Enforce symmetry and Cauchy-Schwarz on (I - K H) P (prevents crash when R = 0)
+      // Enforce symmetry, Cauchy-Schwarz, and avoid subnormal (< 1e-150) underflow in p * p
       const cov = corrected.covariance;
-      const p00 = Math.max(0, cov[0][0]);
-      const p11 = Math.max(0, cov[1][1]);
+      const p00 = cov[0][0] >= 1e-150 ? cov[0][0] : 0;
+      const p11 = cov[1][1] >= 1e-150 ? cov[1][1] : 0;
       const maxOff = Math.sqrt(p00 * p11);
       let off = 0.5 * (cov[0][1] + cov[1][0]);
       if (Math.abs(off) > maxOff) {

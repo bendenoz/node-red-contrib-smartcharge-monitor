@@ -190,8 +190,14 @@ class IMMFilter {
           mixedCov[1][1] += w[i] * (Pi_cov[1][1] + d1 * d1);
         }
 
-        // Enforce exact symmetry against floating-point drift
-        const symOff = 0.5 * (mixedCov[0][1] + mixedCov[1][0]);
+        // Enforce symmetry, Cauchy-Schwarz, and avoid subnormal (< 1e-150) underflow in p * p
+        mixedCov[0][0] = mixedCov[0][0] >= 1e-150 ? mixedCov[0][0] : 0;
+        mixedCov[1][1] = mixedCov[1][1] >= 1e-150 ? mixedCov[1][1] : 0;
+        const maxOff = Math.sqrt(mixedCov[0][0] * mixedCov[1][1]);
+        let symOff = 0.5 * (mixedCov[0][1] + mixedCov[1][0]);
+        if (Math.abs(symOff) > maxOff) {
+          symOff = symOff < 0 ? -maxOff : maxOff;
+        }
         mixedCov[0][1] = symOff;
         mixedCov[1][0] = symOff;
 

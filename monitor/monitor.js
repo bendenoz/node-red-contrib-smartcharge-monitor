@@ -25,7 +25,10 @@ const maxPredictGapMs = 30000;
  * @return {number}
  */
 function parseConfigNumber(raw, fallback, bounds = {}) {
-  if (raw === undefined || raw === null || raw === "") return fallback;
+  const isNumericInput =
+    typeof raw === "number" ||
+    (typeof raw === "string" && raw.trim() !== "");
+  if (!isNumericInput) return fallback;
   const n = Number(raw);
   if (!Number.isFinite(n)) return fallback;
   if (bounds.minExclusive !== undefined && n <= bounds.minExclusive) return fallback;
@@ -56,7 +59,8 @@ const nodeInit = (RED) => {
     });
 
     /** @type {number} target charge% */
-    const maxCharge = parseConfigNumber(config.cutoff, 85, {
+    const cutoffFallback = Math.max(85, Math.min(100, peakCharge + 5));
+    const maxCharge = parseConfigNumber(config.cutoff, cutoffFallback, {
       minExclusive: peakCharge,
       maxInclusive: 100,
     });
@@ -165,7 +169,7 @@ const nodeInit = (RED) => {
       /** in Wh */
       const nrg = props.energy / 3600;
 
-      const accel = k * 3600 * (0 - val);
+      const accel = k * 3600 * (0 - val) || 0;
 
       const hasDecay = props.triggerCusum > w * 1;
       // Retain peak power observed while not in decay

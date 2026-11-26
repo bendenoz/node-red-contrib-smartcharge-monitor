@@ -201,20 +201,62 @@ describe("Monitor Node", () => {
     node.closeCallback();
   });
 
-  it("should safely parse string and out-of-range config values", () => {
+  it("should stop predict-only ticks when extrapolated power reaches <= 0", () => {
     nodeInit(RED);
     const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    Monitor.call(node, { cutoff: 82 });
+
+    let t = 0;
+    for (let i = 0; i < 6; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 50 }, send, done);
+    }
+    // Rapidly steep decay (< 20% jump) so k is high and linear extrapolation crosses 0 within < 30s
+    t += 20000;
+    jest.setSystemTime(new Date(startTime + t));
+    node.inputCallback({ payload: 41 }, send, done);
+
+    jest.advanceTimersByTime(30000);
+    const emittedPwrs = send.mock.calls.map(([msgs]) => msgs[0] && msgs[0].payload);
+    expect(emittedPwrs.every((p) => p === undefined || p > 0)).toBe(true);
+
+    node.closeCallback();
+  });
+
+  it("should safely parse string, whitespace, boolean, and cross-field config values", () => {
+    nodeInit(RED);
+    const Monitor = RED.nodes.registerType.mock.calls[0][1];
+    // peakCharge=90 with invalid/low cutoff=85 should fall back cutoff to 95 (> 90), not 85
     Monitor.call(node, {
-      cutoff: "82",
-      peakCharge: "100",
-      chargerEfficiency: "0",
-      pwrStdev: "0",
+      cutoff: "85",
+      peakCharge: "90",
+      chargerEfficiency: "   ",
+      pwrStdev: /** @type {any} */ (false),
     });
 
-    node.inputCallback({ payload: 20 }, send, done);
-    jest.setSystemTime(new Date(startTime + 20000));
-    node.inputCallback({ payload: 20.1 }, send, done);
-    expect(send).toHaveBeenCalled();
+    let t = 0;
+    for (let i = 0; i < 12; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback({ payload: 50 }, send, done);
+    }
+    // Drop 6% (to 47 W) with decay -> should NOT trigger since cutoff fell back to 95% (~55% of max)
+    const kTrue = 2.0 / 3600;
+    for (let i = 1; i <= 4; i++) {
+      t += 20000;
+      jest.setSystemTime(new Date(startTime + t));
+      node.inputCallback(
+        { payload: 50 * Math.exp(-kTrue * i * 20) },
+        send,
+        done
+      );
+      jest.advanceTimersByTime(2500);
+    }
+    const offCalls = send.mock.calls.filter(
+      ([msgs]) => msgs[2] && msgs[2].payload === false
+    );
+    expect(offCalls).toHaveLength(0);
 
     node.closeCallback();
   });

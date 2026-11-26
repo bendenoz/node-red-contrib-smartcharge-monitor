@@ -2,11 +2,13 @@ const { IMMFilter } = require("./imm-filter");
 const { KalmanFilter } = require("./kalman-filter");
 
 describe("IMMFilter", () => {
-  it("returns [null, null] before init and throws on predict/step", () => {
+  it("returns [null, null] before init and throws on predict/step without mutating Pi", () => {
     const imm = new IMMFilter({ stdK: 0.77e-7, pwrStdev: 0.15 });
+    const initialPi = imm.Pi.map((r) => [...r]);
     expect(imm.mean()).toEqual([null, null]);
     expect(() => imm.predict(1000)).toThrow("No KF instance");
     expect(() => imm.step(10, 1000)).toThrow("No KF instance");
+    expect(imm.Pi).toEqual(initialPi);
   });
 
   it("initializes with fast mode active (mu = [0, 1])", () => {
@@ -168,14 +170,18 @@ describe("IMMFilter", () => {
     }
   });
 
-  it("handles pwrStdev === 0 across both dt = 0 and dt > 0 noisy inputs without throwing", () => {
+  it("handles pwrStdev === 0 across dt = 0 and noisy decaying dt > 0 trajectories without throwing", () => {
     const imm = new IMMFilter({ stdK: 0.77e-7, pwrStdev: 0 });
     imm.init(10, 1000);
     imm.step(10, 1000);
     imm.step(10, 1000); // S = [[0]]
-    imm.step(10.001, 21000);
-    imm.step(9.999, 41000);
-    imm.step(10.002, 61000);
+
+    // Decaying noisy curve that previously triggered subnormal covariance Cauchy-Schwarz errors
+    imm.init(50, 0);
+    for (let i = 1; i <= 30; i++) {
+      const val = 50 * Math.exp(-0.0005 * i * 20) + (i % 2 ? 0.05 : -0.05);
+      imm.step(val, i * 20000);
+    }
 
     const [val, k] = imm.mean();
     expect(Number.isFinite(val)).toBe(true);
