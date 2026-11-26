@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: yarn
+
+      - run: yarn install --frozen-lockfile
+      - run: yarn test
+      - run: yarn build
+      - name: Verify Node-RED build artifacts
+        run: |
+          test -f dist/monitor/monitor.js
+          test -f dist/monitor/monitor.html
+          test -f dist/monitor/imm-filter.js
+          test -f dist/monitor/kalman-filter.js

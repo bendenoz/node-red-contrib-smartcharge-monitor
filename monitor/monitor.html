@@ -8,8 +8,11 @@
         value: 85,
         validate: function (v) {
           const n = Number(v);
-          const p = Number(this.peakCharge ?? 80);
-          return Number.isFinite(n) && n > p && n <= 100;
+          const rawPeak = $("#node-input-peakCharge").length
+            ? $("#node-input-peakCharge").val()
+            : this.peakCharge;
+          const p = Number(rawPeak !== undefined && rawPeak !== "" ? rawPeak : 80);
+          return Number.isFinite(n) && Number.isFinite(p) && n > p && n <= 100;
         },
       },
       chargerEfficiency: {
@@ -23,7 +26,11 @@
         value: 80,
         validate: function (v) {
           const n = Number(v);
-          return Number.isFinite(n) && n >= 0 && n < 100;
+          const rawCutoff = $("#node-input-cutoff").length
+            ? $("#node-input-cutoff").val()
+            : this.cutoff;
+          const c = Number(rawCutoff !== undefined && rawCutoff !== "" ? rawCutoff : 85);
+          return Number.isFinite(n) && n >= 0 && n < 100 && (!Number.isFinite(c) || n < c);
         },
       },
       pwrStdev: {
@@ -38,7 +45,7 @@
     outputs: 3,
     outputLabels: [
       "Charge power, in Watt",
-      "Charge acceleration, in Watt per hour",
+      "Charge power rate of change, in Watt per hour",
       "OFF trigger",
     ],
     icon: "function.svg",
@@ -87,11 +94,12 @@
       <input type="text" id="node-input-peakCharge" />
     </div>
     <div class="form-row">
-      <label for="node-input-pwrStdev">Power Uncertainty</label>
+      <label for="node-input-pwrStdev">Power Uncertainty (W)</label>
       <input type="text" id="node-input-pwrStdev" />
     </div>
     <div class="form-row">
-      For more details about peak charge see
+      Default <code>0.15 W</code> suits <code>2–100 W</code> smart plugs; increase for high-wattage loads with coarse reporting jitter.
+      For peak charge details see
       <a
         href="https://batteryuniversity.com/article/bu-409-charging-lithium-ion"
         target="_blank"
@@ -123,10 +131,10 @@
       </dl>
     </li>
     <li>
-      Charge acceleration
+      Charge power rate of change
       <dl class="message-properties">
         <dt>payload <span class="property-type">number</span></dt>
-        <dd>The rate of change of the charging power, in Watts per hour.</dd>
+        <dd>The rate of change of the charging power, in Watts per hour (W/h).</dd>
       </dl>
     </li>
     <li>
@@ -134,7 +142,7 @@
       <dl class="message-properties">
         <dt>payload <span class="property-type">boolean</span></dt>
         <dd>
-          Message sent when charging should be turned off. Always `false`.
+          Message sent when charging should be turned off. Always <code>false</code>.
         </dd>
       </dl>
     </li>
@@ -142,12 +150,11 @@
 
   <h3>Details</h3>
   <p>
-    The <code>smartcharge-monitor</code> node uses a Kalman filter to refine
-    power consumption data and accurately detect the characteristic time
-    constant of the exponential decay phase. When this time constant is within a
-    valid range (typically around 1 hour), the node then waits for the power
-    level to drop below the specified threshold before stopping the charging
-    process.
+    The <code>smartcharge-monitor</code> node uses a 2-mode Interacting Multiple
+    Model (IMM) Kalman filter to estimate charging power and exponential decay
+    rate across changing load phases. Once statistically significant decay is
+    confirmed and power drops below the target threshold, it emits a single-shot
+    OFF trigger.
   </p>
 
   <h3>References</h3>
