@@ -1,5 +1,20 @@
 <script type="text/javascript">
   (function () {
+    const DEFAULTS = {
+      cutoff: 85,
+      chargerEfficiency: 0.72,
+      peakCharge: 80,
+      pwrStdev: 0.15,
+    };
+
+    function isBlank(raw) {
+      return (
+        raw === undefined ||
+        raw === null ||
+        (typeof raw === "string" && raw.trim() === "")
+      );
+    }
+
     function parseNum(raw) {
       if (
         typeof raw !== "number" &&
@@ -17,8 +32,9 @@
       defaults: {
         name: { value: "" },
         cutoff: {
-          value: 85,
+          value: DEFAULTS.cutoff,
           validate: function (v) {
+            if (isBlank(v)) return true;
             const n = parseNum(v);
             const rawPeak = $("#node-input-peakCharge").length
               ? $("#node-input-peakCharge").val()
@@ -27,20 +43,22 @@
             const p =
               Number.isFinite(parsedPeak) && parsedPeak >= 0 && parsedPeak < 100
                 ? parsedPeak
-                : 80;
+                : DEFAULTS.peakCharge;
             return Number.isFinite(n) && n > p && n <= 100;
           },
         },
         chargerEfficiency: {
-          value: 0.72,
+          value: DEFAULTS.chargerEfficiency,
           validate: function (v) {
+            if (isBlank(v)) return true;
             const n = parseNum(v);
             return Number.isFinite(n) && n > 0 && n <= 1;
           },
         },
         peakCharge: {
-          value: 80,
+          value: DEFAULTS.peakCharge,
           validate: function (v) {
+            if (isBlank(v)) return true;
             const n = parseNum(v);
             const rawCutoff = $("#node-input-cutoff").length
               ? $("#node-input-cutoff").val()
@@ -55,8 +73,9 @@
           },
         },
         pwrStdev: {
-          value: 0.15,
+          value: DEFAULTS.pwrStdev,
           validate: function (v) {
+            if (isBlank(v)) return true;
             const n = parseNum(v);
             return Number.isFinite(n) && n > 0;
           },
@@ -74,6 +93,13 @@
         return this.name || "smartcharge-monitor";
       },
       oneditprepare: function () {
+        Object.keys(DEFAULTS).forEach((key) => {
+          const el = $(`#node-input-${key}`);
+          if (el.length && isBlank(el.val())) {
+            el.val(String(DEFAULTS[key]));
+          }
+        });
+
         $("#btn-smartcharge-toggle-advanced-settings").on("click", function () {
           $("#smartcharge-advanced-settings").toggle();
           if ($("#smartcharge-advanced-settings").is(":visible")) {
@@ -110,7 +136,7 @@
 <script type="text/html" data-template-name="smartcharge-monitor">
   <div class="form-row">
     <label for="node-input-cutoff">Target charge (82% - 90%)</label>
-    <input type="text" id="node-input-cutoff" />
+    <input type="text" id="node-input-cutoff" placeholder="85" />
   </div>
   <div class="form-row">
     <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
@@ -129,15 +155,15 @@
   <div id="smartcharge-advanced-settings" style="display: none;">
     <div class="form-row">
       <label for="node-input-chargerEfficiency">Charger Efficiency</label>
-      <input type="text" id="node-input-chargerEfficiency" />
+      <input type="text" id="node-input-chargerEfficiency" placeholder="0.72" />
     </div>
     <div class="form-row">
       <label for="node-input-peakCharge">Peak Charge</label>
-      <input type="text" id="node-input-peakCharge" />
+      <input type="text" id="node-input-peakCharge" placeholder="80" />
     </div>
     <div class="form-row">
       <label for="node-input-pwrStdev">Power Uncertainty (W)</label>
-      <input type="text" id="node-input-pwrStdev" />
+      <input type="text" id="node-input-pwrStdev" placeholder="0.15" />
     </div>
     <div class="form-row">
       Default <code>0.15 W</code> suits <code>2–100 W</code> smart plugs; increase for high-wattage loads with coarse reporting jitter.
